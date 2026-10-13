@@ -1,0 +1,24 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <Authors>Alex Turcan</Authors>
+    <RepositoryUrl>https://github.com/a7ex-turcan/rtfd</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!--
+    Releases are Native AOT binaries, as for the siblings, so product code runs the trim and
+    AOT analyzers from day one. With TreatWarningsAsErrors, a reflection-heavy dependency
+    fails the build the day it is added, not the day we try to publish. Test projects
+    need not be AOT-clean.
+  -->
+  <PropertyGroup Condition="!$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>

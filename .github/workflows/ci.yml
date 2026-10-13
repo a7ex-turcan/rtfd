@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Windows is the primary target; Linux keeps paths and line endings honest.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+  aot:
+    # Releases are Native AOT binaries, and a guard that passes under the JIT can fail open
+    # after trimming (rtfq ADR 0001). So the binary that would ship is built and run here too.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish Native AOT
+        run: dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o publish
+
+      - name: The published binary runs and accepts the example config
+        shell: pwsh
+        run: |
+          ./publish/rtfd.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version failed" }
+          ./publish/rtfd.exe validate --config examples/rtfd.yaml
+          if ($LASTEXITCODE -ne 0) { throw "validate refused the example config" }
+
+      - name: The published binary refuses what v0 doesn't support, and never echoes a token
+        shell: pwsh
+        run: |
+          $home_ = Join-Path $env:RUNNER_TEMP rtfd-home
+          New-Item -ItemType Directory -Force (Join-Path $home_ prompts) | Out-Null
+          Copy-Item examples/prompts/review.md (Join-Path $home_ prompts)
+          $env:RTFD_HOME = $home_
+
+          # Hooks aren't built yet.
+          $config = (Get-Content examples/rtfd.yaml -Raw) + "    hooks:`n      - name: build`n        command: dotnet build`n"
+          Set-Content (Join-Path $home_ rtfd.yaml) $config -NoNewline
+          $out = ./publish/rtfd.exe validate | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.hooks_unsupported') { throw "hooks were not refused:`n$out" }
+
+          # A token where a variable name belongs is refused without being shown. Built at run
+          # time, so no token-shaped literal sits in the repo.
+          $token = 'ghp_' + ('a' * 36)
+          $config = (Get-Content examples/rtfd.yaml -Raw) -replace 'token_env: GH_TOKEN', "token_env: $token"
+          Set-Content (Join-Path $home_ rtfd.yaml) $config -NoNewline
+          $out = ./publish/rtfd.exe validate 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.token_env_holds_a_token') { throw "the token was not refused:`n$out" }
+          if ($out.Contains($token)) { throw "validate echoed the token" }
+
+          # The runner exits with the last native exit code, which is the refusal above.
+          exit 0

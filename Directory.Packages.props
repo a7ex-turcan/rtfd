@@ -1,0 +1,17 @@
+<Project>
+
+  <!-- Central package management: versions live here, projects reference without them. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="Product">
+    <!-- The node model only, mapped by hand: reflection deserialization doesn't survive AOT. -->
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Tests">
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
+
+</Project>

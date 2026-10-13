@@ -8,8 +8,9 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 [rtfq](https://github.com/a7ex-turcan/rtfq) (databases) and
 [rtfc](https://github.com/a7ex-turcan/rtfc) (relay between sessions).
 
-**Status: design settled, nothing built yet.** You can't run it today. The design is
-[`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
+**Status: early. It doesn't review anything yet.** Phase 0 of the plan is done: `rtfd validate`
+checks a config. The design is [`docs/spec.md`](docs/spec.md) and the build order is
+[`docs/plan.md`](docs/plan.md).
 
 ---
 

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The one executable: `rtfd serve`, `rtfd run`, `rtfd validate`, the `rtfd-git` MCP server
+    (`rtfd git-tools`) and the rest are all modes of this binary.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Rtfd</RootNamespace>
+    <AssemblyName>rtfd</AssemblyName>
+
+    <Version>0.1.0-dev</Version>
+    <Product>rtfd</Product>
+    <Description>Read The Fine Diff: a PR review watcher for any AI agent.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rtfd.Tests" />
+  </ItemGroup>
+
+</Project>

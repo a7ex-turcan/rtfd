@@ -1,0 +1,48 @@
+# A sample rtfd home. Copy this file and prompts/ into ~/.rtfd (or wherever RTFD_HOME points),
+# then run `rtfd validate`. The design behind every key is docs/spec.md.
+
+defaults:
+  # data_dir: D:\rtfd                 # mirrors, worktrees, run folders, state; defaults to the home
+  interval: 5m
+  quiet_period: 3m                    # only pushes reset it
+  ci_max_wait: 30m
+  max_attempts: 3
+  timeout: 30m
+  max_diff_lines: 3000
+  exclude: ["**/*.lock", "**/package-lock.json", "**/__snapshots__/**"]
+  verdict_rule: { not_ready_if_open: [should] }
+  human_resolve_closes: true          # a hand resolve closes the thread; the next summary says so, once
+  secrets:
+    rules: gitleaks                   # bundled gitleaks rule set, loaded as data
+    extra: []                         # more regexes, if needed
+
+agents:
+  claude:
+    account: claude-personal          # usage-limit pauses cover every agent entry on this account
+    command: claude -p --permission-mode dontAsk --output-format json
+    model: opus
+    effort: medium
+    output: { from: stdout, extract: ".result" }
+    # isolation and tools are built in for claude and can't be loosened. project_config adds to the
+    # built-in list of files reset to the base branch; limit_patterns replace the built-in ones.
+
+repos:
+  - name: nutrx
+    provider: github
+    repo: a7ex-turcan/nutrx
+    trust: trusted                    # public, but only the owner's PRs are reviewed
+    agent: claude
+    prompt: prompts/review.md         # re-read on every run
+    authors: [a7ex-turcan]
+    verdicts: [comment]               # GitHub forbids self-approval and self-request-changes
+    token_env: GH_TOKEN               # the name of the variable, never the token
+
+  - name: sandbox
+    provider: github
+    repo: a7ex-turcan/rtfd-sandbox    # live tests and hostile fixture PRs (plan Phase 3)
+    trust: trusted
+    agent: claude
+    prompt: prompts/review.md
+    authors: [a7ex-turcan]
+    verdicts: [comment]
+    token_env: GH_TOKEN

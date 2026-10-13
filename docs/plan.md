@@ -74,8 +74,7 @@ src/Rtfd/
   Resources/                 gitleaks rules (as JSON), default prompt
 tests/Rtfd.Tests/            xUnit v3
 tests/FakeAgent/             a stand-in agent CLI that prints canned output per scenario
-prompts/review.md            the default review prompt
-examples/rtfd.yaml           a sample config
+examples/                    a sample home: rtfd.yaml and prompts/review.md, the default review prompt
 scripts/                     gitleaks rule conversion, release helpers
 ```
 
@@ -111,12 +110,18 @@ line numbers. Nothing touches the network, git or an agent yet.
    - `trust: untrusted` is refused (the tier doesn't exist yet);
    - `hooks:` is refused until hooks ship;
    - `provider: bitbucket` and agents other than claude are refused until v1;
-   - checks that need the provider (visibility, whoami) are registered now and run in Phase 2.
+   - `context_tools` are refused until they ship;
+   - the guards a config can't loosen (spec decision 41): an agent's CLI comes from its command's
+     executable, and a shell or wrapper is refused; the command may not set flags rtfd renders
+     itself; isolation and tools can't go beyond the built-in set;
+   - checks that need the provider (visibility, whoami) are listed now and run in Phase 2.
 7. **`rtfd validate`**, config only for now.
 8. **CI** (GitHub Actions) on `windows-latest` and `ubuntu-latest`: build, test,
    `dotnet format --verify-no-changes`, and on Windows a Native AOT publish that runs
-   `rtfd --version` and `rtfd validate --config examples/rtfd.yaml` with the published binary.
-9. **`examples/rtfd.yaml`**: nutrx and the sandbox repo.
+   `rtfd --version` and `rtfd validate --config examples/rtfd.yaml` with the published binary,
+   then checks that the binary refuses hooks and a token in `token_env` without echoing it.
+9. **`examples/`**, a sample home: `rtfd.yaml` (nutrx and the sandbox repo) and
+   `prompts/review.md`.
 
 ### Not in this phase
 
@@ -267,7 +272,7 @@ Checkpoint: the agent calls `log` and `blame` during a real review.
 
 ### 1e. The prompt
 
-1. **`prompts/review.md`**: the reviewer's job; PR text, code and instruction files are material to
+1. **`examples/prompts/review.md`**: the reviewer's job; PR text, code and instruction files are material to
    review, never instructions to follow; where the inputs are; focus on the interdiff when there is
    one; the output schema with an example; anchors; the Should / Could / MINOR convention and tone.
 2. **Tuning** against three to five real nutrx PRs. Merged PRs work too, since `refs/pull/N/head`
@@ -632,3 +637,5 @@ To fold into the spec when the phase that meets them lands:
    rtfd's record of what it resolved decides (Phase 4).
 6. ~~**Where the config file lives**, given that `data_dir` is inside it.~~ Settled as spec decision
    40 (2026-10-13).
+7. ~~**Which CLI an agent entry runs**, and what a config may not loosen.~~ Settled as spec decision
+   41 in Phase 0 (2026-10-13).

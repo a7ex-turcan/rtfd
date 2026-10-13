@@ -17,15 +17,22 @@ in rtfc). Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `serve`, `run`, `status`, `validate`, the `rtfd-git` MCP server (planned) |
-| `tests/Rtfd.Tests/` | xUnit v3 | Unit and integration tests (planned) |
-| `tests/FakeAgent/` | C# | A stand-in agent CLI with canned output, for tests (planned) |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate` today; `run`, `serve`, `status`, the `rtfd-git` MCP server and the rest to come |
+| `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
+| `tests/FakeAgent/` | C# | A stand-in agent CLI with canned output, for tests (Phase 1) |
 
 ## Status
 
-**Nothing is built yet.** The design is settled for v0 and the plan is written. Next is **Phase 0**
-of `docs/plan.md`: toolchain, CLI skeleton, config loader, CI. Update this section when a phase
-lands.
+**Phase 0 has landed** (2026-10-13): the toolchain, the CLI dispatcher with every spec command
+either built or naming the phase that brings it, `RtfdHome` (spec decision 40), the config loader
+(`Config/ConfigLoader.cs`, hand-mapped from YamlDotNet's node model, line numbers on every error)
+and the checks (`Config/ConfigChecks.cs`: what v0 refuses, and the guards a config can't loosen,
+spec decision 41). `rtfd validate` runs them; the checks that need the provider or an agent are
+listed as waiting for Phase 2. CI builds and tests on Windows and Linux and runs the published
+Native AOT binary.
+
+Next is **Phase 1**, the dry run end to end, starting with 1a (the GitHub read side, the mirror,
+the worktree and the run folder). Update this section when a phase lands.
 
 ## Hard rules
 
@@ -164,16 +171,20 @@ Don't settle these silently in code. Raise them.
 
 ## Commands
 
-Planned, once Phase 0 lands:
-
 ```bash
 dotnet build                                  # build everything (rtfd.slnx)
 dotnet test                                   # run the tests
 dotnet format --verify-no-changes             # the formatting check CI runs
 dotnet run --project src/Rtfd -- --help       # the CLI
-RTFD_HOME=/some/temp/home dotnet run --project src/Rtfd -- run sandbox --pr 1 --dry-run
+dotnet run --project src/Rtfd -- validate --config examples/rtfd.yaml
 dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o /some/dir   # the AOT binary
 ```
+
+The AOT publish needs the MSVC linker (Visual Studio's "Desktop development with C++"). This
+machine doesn't have it, so the AOT build and the checks against the published binary run in CI
+(the `aot` job); the IL compiler step still runs locally and reports trim and AOT warnings before
+the link fails. From Phase 1: `RTFD_HOME=/some/temp/home dotnet run --project src/Rtfd -- run
+sandbox --pr 1 --dry-run`.
 
 ## Commits, changelog and versions
 
@@ -204,3 +215,7 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `docs/plan.md` | Phases, exit criteria, open decisions per phase, gaps found in the spec |
 | `README.md` | What rtfd is, for users; keep it true when behaviour changes |
 | `CHANGELOG.md` | Per-version history |
+| `examples/` | A sample home: `rtfd.yaml` and `prompts/review.md`. CI validates it with the AOT binary |
+| `src/Rtfd/` | `EntryPoint.cs` dispatch · `RtfdHome.cs` home and data directory · `Cli/` commands and args · `Config/` loader, cursor, model, built-ins per agent CLI, checks |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) |
+| `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary |

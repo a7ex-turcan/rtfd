@@ -525,6 +525,7 @@ From the fourth review:
 From planning:
 
 40. **Where the config lives.** One home folder, `RTFD_HOME`, default `~/.rtfd`, holding `rtfd.yaml` and the prompts, the same pattern as rtfm's and rtfc's homes. `data_dir` moves everything rtfd writes (mirrors, worktrees, run folders, state, logs) elsewhere, and defaults to the home. `--config <path>` points one command at another file, and relative paths in a config resolve against its folder. `install-service` writes the absolute config path into the service's command line, so the service never depends on an environment variable (rtfc found that a login item can't carry `RTFC_HOME`).
+41. **What a config can and can't say about an agent.** The CLI an agent entry runs is decided by its command's executable (`claude`, `copilot`, with any path or extension). Anything else, a shell or wrapper in front of either included, is refused, because rtfd can only confine a CLI it knows. Isolation and tools are built in per CLI, and a config can't loosen them. Flags rtfd renders itself (tools, permissions, MCP config, settings, extra directories) are refused in the command, and so is any permission mode but `dontAsk` or `default`. `project_config` adds to the built-in list of files reset to the base branch and never removes from it. `limit_patterns` replace the built-in ones, because their wording changes.
 
 ## Open questions
 

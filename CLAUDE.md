@@ -12,14 +12,13 @@ and confirms it landed. On a clean pass it says "lgtfm".
 **The design is `docs/spec.md`, and it is the source of truth.** Read the section you're working on
 before changing code. **`docs/plan.md` is the build order**: phases, exit criteria, and the decisions
 each phase has to make. If code has to depart from the spec, update the spec (the design) in the same
-change, and record the reason in `docs/implementation.md` (created the first time that happens, as
-in rtfc). Don't let them drift.
+change, and record the reason in `docs/implementation.md`. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate` today; `run`, `serve`, `status`, the `rtfd-git` MCP server and the rest to come |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run --dry-run` and the `rtfd-git` MCP server today; posting, `serve`, `status` and the rest to come |
 | `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
-| `tests/FakeAgent/` | C# | A stand-in agent CLI with canned output, for tests (Phase 1) |
+| `tests/FakeAgent/` | C# | A stand-in agent CLI, built as `claude`, with canned output, for tests |
 
 ## Status
 
@@ -31,8 +30,14 @@ spec decision 41). `rtfd validate` runs them; the checks that need the provider 
 listed as waiting for Phase 2. CI builds and tests on Windows and Linux and runs the published
 Native AOT binary.
 
-Next is **Phase 1**, the dry run end to end, starting with 1a (the GitHub read side, the mirror,
-the worktree and the run folder). Update this section when a phase lands.
+**Phase 1 is mostly built** (2026-10-13): `rtfd run <repo> --pr <n> --dry-run` runs a real review
+end to end and prints what it would post. The GitHub read side (`Providers/GitHub/`), the mirror,
+diff model and worktree with its agent-config reset (`Git/`), the allowlisted child environment
+(`Processes/`), the claude adapter and outcome classification (`Agents/`), `rtfd-git`
+(`GitTools/`), the findings contract, validator, secret scanner (bundled gitleaks rules) and
+verdict (`Review/`), and the orchestration and printout (`Runs/`). What's left of Phase 1: tuning
+the prompt on real nutrx PRs with the owner, and the exit run on the sandbox's hostile PR. Update
+this section when a phase lands.
 
 ## Hard rules
 
@@ -145,16 +150,35 @@ Known from rtfc, checked 2026-09-27 against Claude Code 2.1.283 (re-check on the
 - A nested Claude refuses to run under a parent session's `CLAUDE*` environment variables.
 - Permission deny rules match paths for `Read` only; `Grep` and `Glob` have none.
 
+Checked 2026-10-13 on Claude Code 2.1.296, with the flags `ClaudeAdapter` renders, in a scratch
+folder with a stripped environment:
+
+- `--add-dir` extends `--restricted`'s confinement: a file in the added folder was read, one outside
+  both folders was refused. So the worktree sits next to the run folder (spec decision 42).
+- `--output-format stream-json --verbose` prints an `init` message with `tools`, `mcp_servers`,
+  `plugins`, `skills`, `slash_commands` and `agents`. With the isolation flags: tools Glob, Grep,
+  Read; no MCP servers; no skills or slash commands; only built-in plugins
+  (`cc-plugin-agents-md`, `cc-plugin-telemetry`, `cc-plugin-plugin-authoring`), none of the user's.
+- No CLAUDE.md or AGENTS.md was in the model's context: not the user's, not one in the working
+  directory, not one in the `--add-dir` folder. The built-in `cc-plugin-agents-md` is why AGENTS.md
+  is reset for claude too (spec decision 43).
+- Claude needs `SystemRoot` on Windows (Bun refuses to start without it); the allowlist has it.
+- A session limit prints exit 1 and a wrapper with `is_error: true`, `api_error_status: 429`,
+  `api_error: "usage_limit_reached"` and `result: "You've hit your session limit · resets 4:30pm
+  (Europe/Chisinau)"`. Both the text and the fields classify as `limit`.
+- New in 2.1.296: `--permission-prompts none`, `--safe-mode`, `--bare` (needs an API key, so not for
+  subscription accounts). Not used yet.
+- git 2.47.1: `git blame --end-of-options <rev> -- <path>` reads the path as a revision, so blame
+  goes without `--end-of-options` (its revision is rtfd's own SHA). `log`, `diff`, `show`,
+  `rev-parse`, `rev-list` and `ls-tree` take it fine.
+
 Unverified, needed by v0:
 
-- The spec's open question 2: `--setting-sources`, and whether user plugins load in `-p` mode.
-- Whether the user's `~/.claude/CLAUDE.md`, auto memory, skills and output styles load under `-p`
-  with the isolation flags.
-- Whether `--add-dir` extends `--restricted`'s confinement (decides where the worktree sits).
-- That `--output-format stream-json --verbose` reports the loaded tools and MCP servers (validate's
-  effective tool list), and that `CLAUDE_CONFIG_DIR` gives a scratch user setup.
-- GitHub: review threads and their resolution are GraphQL-only (`reviewThreads`,
-  `resolveReviewThread`); one inline comment outside a hunk fails the whole review with a 422.
+- The spec's open question 2: `--setting-sources`; auto memory and output styles under `-p` (the
+  init message says `output_style: default`). Phase 2's `validate` proves these on every run.
+- That `CLAUDE_CONFIG_DIR` gives a scratch user setup.
+- GitHub: `resolveReviewThread`; one inline comment outside a hunk fails the whole review with a
+  422 (Phase 3). Review threads come from GraphQL `reviewThreads` (checked, with recordings).
 
 Checked:
 
@@ -178,13 +202,19 @@ dotnet format --verify-no-changes             # the formatting check CI runs
 dotnet run --project src/Rtfd -- --help       # the CLI
 dotnet run --project src/Rtfd -- validate --config examples/rtfd.yaml
 dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o /some/dir   # the AOT binary
+
+# One review, printed instead of posted, from a throwaway home (never the real ~/.rtfd):
+RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/Rtfd -- run nutrx --pr 37 --dry-run --verbose
+
+# The rtfd-git guard tests against a built binary over stdio, as CI does with the AOT one:
+RTFD_BINARY=src/Rtfd/bin/Debug/net10.0/rtfd.exe tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.GitToolsTests
 ```
 
 The AOT publish needs the MSVC linker (Visual Studio's "Desktop development with C++"). This
 machine doesn't have it, so the AOT build and the checks against the published binary run in CI
 (the `aot` job); the IL compiler step still runs locally and reports trim and AOT warnings before
-the link fails. From Phase 1: `RTFD_HOME=/some/temp/home dotnet run --project src/Rtfd -- run
-sandbox --pr 1 --dry-run`.
+the link fails. `GH_TOKEN="$(gh auth token)"` keeps the token out of files and shell history; never
+paste one into a command.
 
 ## Commits, changelog and versions
 
@@ -213,9 +243,13 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | --- | --- |
 | `docs/spec.md` | The design and the source of truth |
 | `docs/plan.md` | Phases, exit criteria, open decisions per phase, gaps found in the spec |
+| `docs/implementation.md` | Where the code goes further than the spec, or settled what it left open, and why |
 | `README.md` | What rtfd is, for users; keep it true when behaviour changes |
 | `CHANGELOG.md` | Per-version history |
 | `examples/` | A sample home: `rtfd.yaml` and `prompts/review.md`. CI validates it with the AOT binary |
 | `src/Rtfd/` | `EntryPoint.cs` dispatch · `RtfdHome.cs` home and data directory · `Cli/` commands and args · `Config/` loader, cursor, model, built-ins per agent CLI, checks |
-| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) |
+| `src/Rtfd/` (Phase 1) | `Providers/` GitHub read side · `Git/` GitRunner, mirror, diff model, worktree and config reset · `Processes/` ProcessRunner, allowlisted environment · `Agents/` claude adapter, output extraction, outcomes, limit parser · `GitTools/` rtfd-git · `Review/` findings contract, validator, review builder and verdict, `Secrets/` · `Runs/` run folder, prompt, `ReviewRun`, dry-run printout |
+| `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider, FakeAgent, RunHarness · `Recordings/github/` real GitHub answers, trimmed |
+| `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment and stdin |
 | `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary |

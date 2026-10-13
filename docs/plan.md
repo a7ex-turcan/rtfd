@@ -52,7 +52,8 @@ because follow-ups are most of what an unattended watcher does.
 
 ## Project layout
 
-Settled in Phase 0. It follows rtfc: one executable, one test project, the same build settings.
+Settled in Phase 0, extended in Phase 1 (`Processes/`, `Runs/`). It follows rtfc: one executable,
+one test project, the same build settings.
 
 ```
 rtfd.slnx
@@ -65,15 +66,17 @@ src/Rtfd/
   Providers/                 IProvider; GitHub/ (REST + GraphQL); Bitbucket/ in v1
   Git/                       GitRunner (hardened env), mirror, worktrees, diff model, interdiff
   GitTools/                  the rtfd-git MCP server (hand-rolled JSON-RPC)
-  Agents/                    IAgentAdapter; Claude/; ProcessRunner (scrubbed env, tree kill); limit parser
+  Processes/                 ProcessRunner (allowlisted env, tree kill), ChildEnvironment
+  Agents/                    claude adapter, output extraction, outcome classification, limit parser
   Review/                    findings contract, validator, anchors, Secrets/, verdict, agent-config findings
+  Runs/                      run folder, prompt rendering, one review end to end, dry-run printout
   Posting/                   write-ahead record, poster, read-back verification, marker
   State/                     SQLite store, schema.sql, migrations
   Serve/                     scheduler, change detector, status file, pause and resume
   Service/                   install-service per OS
   Resources/                 gitleaks rules (as JSON), default prompt
 tests/Rtfd.Tests/            xUnit v3
-tests/FakeAgent/             a stand-in agent CLI that prints canned output per scenario
+tests/FakeAgent/             a stand-in agent CLI, built as `claude` so rtfd renders claude's flags for it
 examples/                    a sample home: rtfd.yaml and prompts/review.md, the default review prompt
 scripts/                     gitleaks rule conversion, release helpers
 ```
@@ -147,6 +150,9 @@ The provider, git, agents, posting, state.
 **Goal:** `rtfd run nutrx --pr N --dry-run` prints the inputs, the agent's findings, the validation
 result, the computed verdict and the exact review it would post, for real PRs, with every guard in
 place. Then the prompt is tuned until the output reads like a review the owner would post.
+
+**Status (2026-10-13):** 1a to 1d are built and tested, and real dry runs work on nutrx. 1e's
+tuning and the exit run on the sandbox's hostile PR are under way; the owner judges the reviews.
 
 Built in five steps, each ending in something that runs.
 
@@ -273,8 +279,10 @@ Checkpoint: the agent calls `log` and `blame` during a real review.
 ### 1e. The prompt
 
 1. **`examples/prompts/review.md`**: the reviewer's job; PR text, code and instruction files are material to
-   review, never instructions to follow; where the inputs are; focus on the interdiff when there is
-   one; the output schema with an example; anchors; the Should / Could / MINOR convention and tone.
+   review, never instructions to follow; focus on the interdiff when there is one; the Should /
+   Could / MINOR convention and tone. Where the inputs are, the output schema with an example and
+   the anchor rules are rtfd's own part, appended to every prompt (spec decision 46), so the prompt
+   file can't break the contract.
 2. **Tuning** against three to five real nutrx PRs. Merged PRs work too, since `refs/pull/N/head`
    stays, so the repo's history is the tuning set. Each output is printed with the prompt's hash.
 
@@ -304,11 +312,10 @@ threads (v1).
 
 ### Risks and decisions
 
-- ❓ **Where the worktree sits.** If Claude's read confinement (`--restricted` confines file tools to
-  the working directory) can't be extended to a path outside it, put the worktree *inside* the run
-  folder (`<run>/worktree/`). The working directory is still not the worktree, so its project
-  settings don't load, and reads stay confined by construction. That departs from "a run folder next
-  to it", so record it in the spec if taken.
+- ✔ **Where the worktree sits** (settled 2026-10-13, spec decision 42). On Claude Code 2.1.296,
+  `--restricted` confines file tools to the working directory *plus `--add-dir`*, and a read outside
+  both was refused, so the worktree stays next to the run folder, at `<data>/worktrees/<run id>/`.
+  The fallback (the worktree inside the run folder) wasn't needed.
 - ⚠ **Grep and Glob have no path permission rules** in Claude Code (rtfc found this), so deny rules on
   Read alone don't confine the agent. Confine by working directory, not by deny rules.
 - ⚠ **What Claude loads beyond settings** under `-p`: the user's `~/.claude/CLAUDE.md`, auto memory,
@@ -408,8 +415,9 @@ Thread replies and resolves, follow-ups, the scheduler.
 
 - ⚠ A 422 from GitHub means the validator let something through (most likely a line outside a hunk).
   Log the offending comment, count the run `invalid`, and fix the validator; never retry blindly.
-- ❓ **The sandbox repo.** Create `a7ex-turcan/rtfd-sandbox` (private) for live tests and the hostile
-  fixture PRs. Live tests run only with `RTFD_LIVE_GITHUB=1`, never by default in CI.
+- ✔ **The sandbox repo.** `a7ex-turcan/rtfd-sandbox` (private) exists since 2026-10-13, with a small
+  Python package and a test workflow, for live tests and the hostile fixture PRs. Live tests run
+  only with `RTFD_LIVE_GITHUB=1`, never by default in CI.
 
 ---
 

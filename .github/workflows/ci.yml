@@ -85,3 +85,13 @@ jobs:
 
           # The runner exits with the last native exit code, which is the refusal above.
           exit 0
+
+      - name: rtfd-git refuses hostile arguments in the published binary
+        shell: pwsh
+        run: |
+          # The same tests as under the JIT, but with RTFD_BINARY set they drive the published
+          # `rtfd git-tools` over stdio, as Claude does (plan Phase 1 exit criteria).
+          dotnet build tests/Rtfd.Tests -c Release
+          $env:RTFD_BINARY = (Resolve-Path publish/rtfd.exe).Path
+          ./tests/Rtfd.Tests/bin/Release/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.GitToolsTests
+          if ($LASTEXITCODE -ne 0) { throw "rtfd-git's argument checks failed in the AOT binary" }

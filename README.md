@@ -8,9 +8,10 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 [rtfq](https://github.com/a7ex-turcan/rtfq) (databases) and
 [rtfc](https://github.com/a7ex-turcan/rtfc) (relay between sessions).
 
-**Status: early. It doesn't review anything yet.** Phase 0 of the plan is done: `rtfd validate`
-checks a config. The design is [`docs/spec.md`](docs/spec.md) and the build order is
-[`docs/plan.md`](docs/plan.md).
+**Status: early. It reviews, but doesn't post yet.** `rtfd run <repo> --pr <n> --dry-run` runs
+a real review of a GitHub PR with Claude Code and prints exactly what it would post; `rtfd validate`
+checks a config. Posting arrives in Phase 3 of the plan. The design is
+[`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
 
 ---
 
@@ -77,7 +78,21 @@ repos:
 
 The full draft is in the spec.
 
-## Commands (planned)
+## Trying it
+
+```bash
+mkdir -p ~/.rtfd && cp -r examples/rtfd.yaml examples/prompts ~/.rtfd/   # then edit the repos
+GH_TOKEN="$(gh auth token)" rtfd validate
+GH_TOKEN="$(gh auth token)" rtfd run nutrx --pr 37 --dry-run
+```
+
+The dry run prints the inputs, each attempt, the review as it would post (summary, inline
+comments, redactions) and the verdict with the reason. `--verbose` adds the agent's raw answer,
+`--keep` leaves the run folder and worktree for a look, and `--inputs-only` stops before the agent.
+
+## Commands
+
+Built so far: `validate` (config checks only until Phase 2) and `run --dry-run`. The rest are planned.
 
 | Command | What it does |
 |---|---|
@@ -102,4 +117,5 @@ Phases and exit criteria are in [`docs/plan.md`](docs/plan.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The secret check bundles [gitleaks](https://github.com/gitleaks/gitleaks)' rule
+set, also MIT; its notice is in `src/Rtfd/Resources/gitleaks-LICENSE.txt` and in the binary.

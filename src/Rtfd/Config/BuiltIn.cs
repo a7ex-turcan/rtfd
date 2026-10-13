@@ -17,9 +17,10 @@ internal static class BuiltIn
     /// </summary>
     public static ProjectConfigPaths ProjectConfig(AgentKind kind) => kind switch
     {
+        // AGENTS.md too: Claude Code 2.1.296 ships a built-in plugin, cc-plugin-agents-md, that reads it.
         AgentKind.Claude => new(
             [".claude/settings.json", ".claude/settings.local.json", ".claude/**/*.json", ".mcp.json"],
-            ["CLAUDE.md", "**/CLAUDE.md", "CLAUDE.local.md", "**/CLAUDE.local.md", ".claude/**/*.md"]),
+            ["CLAUDE.md", "**/CLAUDE.md", "CLAUDE.local.md", "**/CLAUDE.local.md", ".claude/**/*.md", "AGENTS.md", "**/AGENTS.md"]),
         AgentKind.Copilot => new(
             [".github/copilot/settings.json", ".github/copilot/settings.local.json", ".github/copilot/**"],
             [".github/copilot-instructions.md", ".github/instructions/**", "AGENTS.md"]),

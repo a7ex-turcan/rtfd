@@ -3,6 +3,7 @@
     <Project Path="src/Rtfd/Rtfd.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/FakeAgent/FakeAgent.csproj" />
     <Project Path="tests/Rtfd.Tests/Rtfd.Tests.csproj" />
   </Folder>
 </Solution>

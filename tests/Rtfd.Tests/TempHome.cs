@@ -74,9 +74,15 @@ public sealed class TempHome : IDisposable
     {
         try
         {
+            // git writes its objects read-only.
+            foreach (var file in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(Root, recursive: true);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best effort; the temp directory gets cleaned eventually.
         }

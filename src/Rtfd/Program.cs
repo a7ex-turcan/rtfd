@@ -9,6 +9,8 @@ var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 var stdout = Console.IsOutputRedirected ? Utf8Writer(Console.OpenStandardOutput()) : Console.Out;
 var stderr = Console.IsErrorRedirected ? Utf8Writer(Console.OpenStandardError()) : Console.Error;
 
-return EntryPoint.Run(args, stdout, stderr);
+var stdin = new StreamReader(Console.OpenStandardInput(), utf8);
+
+return EntryPoint.Run(args, stdout, stderr, stdin: stdin);
 
 TextWriter Utf8Writer(Stream stream) => TextWriter.Synchronized(new StreamWriter(stream, utf8) { AutoFlush = true });

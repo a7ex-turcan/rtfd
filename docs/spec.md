@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0. Nothing is built yet.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate` and `rtfd run --dry-run` exist; nothing posts yet.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -95,7 +95,7 @@ So:
 
 ### 3. rtfd decides the verdict, not the agent
 
-The agent supplies findings and the summary prose. rtfd computes the verdict from policy, for example "any open `should` means not ready". The agent can never post "ready" next to two Shoulds, and the verdict always matches the findings. Severity names live in the schema because rtfd reasons about them. Tone and wording live in the prompt.
+The agent supplies findings and the summary prose. rtfd computes the verdict from policy, for example "any open `should` means not ready". The agent can never post "ready" next to two Shoulds, and the verdict always matches the findings. rtfd also writes the review's first line from the verdict ("Not ready: 1 Should open." or "Ready to merge from my side."), so the text says the same as the verdict even where the provider only allows a comment. Severity names live in the schema because rtfd reasons about them. Tone and wording live in the prompt.
 
 "Open" means everything still unresolved, not just this run's findings:
 - the new findings from this run;
@@ -190,7 +190,7 @@ Before anything is posted:
   - the gitleaks rule set, loaded as data, plus extra patterns from the config.
 
   What happens on a match depends on where the secret came from:
-  - **It is in the diff** (the PR commits a credential): rtfd redacts it in the post (`ghp_…REDACTED`) and adds a Should of its own: "This commits a credential. Remove it and rotate it." This is often the most important thing the review says, so it is never silently dropped.
+  - **It is in the diff** (the PR commits a credential): rtfd redacts it in the post (`ghp_…REDACTED`) and adds a Should of its own: "This commits a credential. Remove it and rotate it." This is often the most important thing the review says, so it is never silently dropped. rtfd also scans the diff's added lines with the same rules, so a committed credential gets that Should even when the agent never mentions it.
   - **It is not in the diff** (for example, one of rtfd's own tokens, or a file from outside the PR): that looks like exfiltration. The whole post is blocked and counts as `fatal` for that PR, surfaced in `status` and through rtfc. It is not retried, because a retry would likely do the same.
 
 If validation fails for any other reason, the run counts as `invalid`: retry with the errors appended to the prompt.
@@ -358,7 +358,7 @@ agents:
       mcp: [rtfd-git]
     project_config:                   # reset to the base branch; deleted if the base has none
       executable: [".claude/settings.json", ".claude/settings.local.json", ".claude/**/*.json", ".mcp.json"]
-      instructions: ["CLAUDE.md", "**/CLAUDE.md", ".claude/**/*.md"]
+      instructions: ["CLAUDE.md", "**/CLAUDE.md", "CLAUDE.local.md", "**/CLAUDE.local.md", ".claude/**/*.md", "AGENTS.md", "**/AGENTS.md"]
     limit_patterns:
       # e.g. "You've hit your session limit · resets 12:10am (Europe/Chisinau)"
       - "(?i)hit your (session|usage|weekly) limit.*?resets\\s+(?<date>[A-Z][a-z]{2}\\s+\\d{1,2},?\\s+)?(?<reset>\\d{1,2}(:\\d{2})?\\s*[ap]m)(\\s*\\((?<zone>[^)]+)\\))?"
@@ -526,6 +526,14 @@ From planning:
 
 40. **Where the config lives.** One home folder, `RTFD_HOME`, default `~/.rtfd`, holding `rtfd.yaml` and the prompts, the same pattern as rtfm's and rtfc's homes. `data_dir` moves everything rtfd writes (mirrors, worktrees, run folders, state, logs) elsewhere, and defaults to the home. `--config <path>` points one command at another file, and relative paths in a config resolve against its folder. `install-service` writes the absolute config path into the service's command line, so the service never depends on an environment variable (rtfc found that a login item can't carry `RTFC_HOME`).
 41. **What a config can and can't say about an agent.** The CLI an agent entry runs is decided by its command's executable (`claude`, `copilot`, with any path or extension). Anything else, a shell or wrapper in front of either included, is refused, because rtfd can only confine a CLI it knows. Isolation and tools are built in per CLI, and a config can't loosen them. Flags rtfd renders itself (tools, permissions, MCP config, settings, extra directories) are refused in the command, and so is any permission mode but `dontAsk` or `default`. `project_config` adds to the built-in list of files reset to the base branch and never removes from it. `limit_patterns` replace the built-in ones, because their wording changes.
+
+From building Phase 1:
+
+42. **The worktree sits next to the run folder**, at `<data>/worktrees/<run id>/`, as the run manager says. On Claude Code 2.1.296, `--restricted` confines file tools to the working directory plus `--add-dir`, and a read outside both is refused, so the worktree needs no move into the run folder (plan Phase 1's fallback).
+43. **AGENTS.md is a claude instruction file too.** Claude Code 2.1.296 ships a built-in plugin, `cc-plugin-agents-md`, so `AGENTS.md` and `**/AGENTS.md` are reset to the base branch for claude agents as well as copilot ones.
+44. **rtfd writes the verdict line** at the top of every review (decision 3). The prompt tells the agent its summary shouldn't say whether the PR is ready.
+45. **Committed credentials are found in the diff as well as in the outgoing text.** The scan of the diff's added lines makes sure the credential Should is there even when the agent never mentions the credential.
+46. **The findings contract is rtfd's, not the prompt file's.** rtfd appends where the inputs are and the schema with an example to the repo's prompt file, so editing the prompt can't break the contract, and the contract always matches the binary that validates it. The prompt file holds the job, the conventions and the tone.
 
 ## Open questions
 

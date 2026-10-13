@@ -21,8 +21,6 @@ public static class EntryPoint
     /// <summary>Commands from the spec's CLI table that aren't built yet, and the plan phase that brings each.</summary>
     internal static readonly IReadOnlyDictionary<string, string> NotYetBuilt = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["run"] = "Phase 1",
-        ["git-tools"] = "Phase 1",
         ["retry"] = "Phase 3",
         ["serve"] = "Phase 5",
         ["status"] = "Phase 5",
@@ -35,7 +33,8 @@ public static class EntryPoint
     /// <param name="stdout">Results.</param>
     /// <param name="stderr">Diagnostics.</param>
     /// <param name="environment">Reads an environment variable; tests pass their own so they never change the real one.</param>
-    public static int Run(string[] args, TextWriter stdout, TextWriter stderr, Func<string, string?>? environment = null)
+    /// <param name="stdin">The MCP protocol's input in <c>rtfd git-tools</c>.</param>
+    public static int Run(string[] args, TextWriter stdout, TextWriter stderr, Func<string, string?>? environment = null, TextReader? stdin = null)
     {
         if (args is ["--version" or "version"])
         {
@@ -57,6 +56,10 @@ public static class EntryPoint
             {
                 case "validate":
                     return ValidateCommand.Run(ctx, rest);
+                case "run":
+                    return RunCommand.Run(ctx, rest);
+                case "git-tools":
+                    return GitToolsCommand.Run(ctx, rest, stdin ?? Console.In);
                 case var command when NotYetBuilt.TryGetValue(command, out var phase):
                     stderr.WriteLine($"rtfd {command}: not built yet. It arrives in {phase} of the plan ({PlanUrl}).");
                     return Failure;
@@ -78,12 +81,14 @@ public static class EntryPoint
         usage: rtfd <command> [args]
 
           validate [--config <path>]       check the config; provider and agent checks come in Phase 2
-          run <repo> --pr <n> [--dry-run]  one review now (Phase 1)
+          run <repo> --pr <n> --dry-run    one review now, printed instead of posted
+              [--inputs-only] [--keep] [--verbose] [--config <path>]
           retry <repo> --pr <n>            give a PR its attempts back (Phase 3)
           serve                            watch every configured repo (Phase 5)
           status                           is it watching, and what has it done (Phase 5)
           pause <repo> | resume <repo>     stop or restart watching one repo (Phase 5)
           install-service                  start serve at logon, headless (Phase 6)
+          git-tools --run <folder>         internal: the rtfd-git MCP server, started by the agent
           --version
 
         The config is rtfd.yaml in the home: RTFD_HOME, else ~/.rtfd. --config <path> picks another.

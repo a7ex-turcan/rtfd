@@ -1,0 +1,29 @@
+{
+  "url": "https://api.github.com/repos/a7ex-turcan/nutrx/pulls/36",
+  "number": 36,
+  "state": "closed",
+  "title": "Nutrient form keeps the field being edited above the keyboard",
+  "body": "## Nutrient form keeps the field being edited above the keyboard\n\nCloses #26.\n\n### The bug\nIn New / Edit Nutrient, tapping an amount field opened the number pad **over** that field: you couldn't see what you typed. The amount fields take focus from a tap gesture, which SwiftUI doesn't scroll into view by itself. The keyboard's floating **Done** bar also isn't part of the keyboard inset, so it covered part of the \"Between\" card too.\n\n### The fix\n- **Field ids:** each field in `NutrientFormFields` gets an id (`NutrientFormField`) through `labelled(_:id:)`.\n- **Scroll on focus:** when `focusedField` changes, `NutrientFormView` waits for the keyboard to rise (350 ms), then scrolls that field to about the upper third of the visible area. It animates normally and jumps straight there with Reduce Motion.\n- **Bottom margin:** a constant 80 pt bottom content margin lets the last field (Notes, in a new nutrient's form) scroll above the Done bar.\n  - A margin that appeared only while editing fixed Notes but made the form jump back to the top when Done closed the keyboard.\n  - With the margin constant, the form just has a little room at the end.\n\n### Checks\n- **Build and tests:** the build succeeds, and all 184 unit tests pass. These are view-only changes.\n- **iPhone 17e simulator** (390 pt wide, the narrowest available; fresh install). Each field was focused from rest; values are the field's y-range against the Done-bar top:\n\n| Field | Before | After |\n|---|---|---|\n| At least, per day | 550–576 (keyboard from 559) | **237–263**, Done bar at 494 |\n| Each tap adds | covered | 237–263 / 494 |\n| Between: Minimum, Maximum | Done bar over the card | 270–296 and 238–263 / 494; whole card visible |\n| Name, Unit | visible | 241–263 / 468 |\n| Notes (last field) | 502–524, behind the bar | **374–396**, 72 pt clear of 468 |\n| Done after Notes | — | stays at the bottom, no jump |\n\n  - Tapping **Add** created the nutrient (\"Zinc, At least, 30 mg\").\n  - Reduce Motion: fields still come into view, without the animation.\n  - No crashes.\n- **Not changed:** the log sheet's Done bar covers the \"N entries\" label, which sits below the field you're typing in (comment on #26). Nothing you edit is hidden there.\n\n| Before: amount covered | After: amount | After: Between | Before: Notes | After: Notes | After Done (no jump) |\n|---|---|---|---|---|---|\n| ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/before-amount-covered.png) | ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/after-amount.png) | ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/after-between-minimum.png) | ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/before-notes-covered.png) | ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/after-notes.png) | ![](https://raw.githubusercontent.com/a7ex-turcan/nutrx/pr-screenshots/pr-kb/after-done-no-jump.png) |\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01UxfnEjgkXDadoPLvWegRiz\n",
+  "draft": false,
+  "html_url": "https://github.com/a7ex-turcan/nutrx/pull/36",
+  "user": {
+    "login": "a7ex-turcan",
+    "id": 197052342
+  },
+  "head": {
+    "ref": "fix/form-keyboard-scroll",
+    "sha": "e6602bc600fa704c5c4c669f07018639524dcb5f",
+    "repo": {
+      "full_name": "a7ex-turcan/nutrx",
+      "private": false
+    }
+  },
+  "base": {
+    "ref": "main",
+    "sha": "c7015127f01fe9e14151c79ae2061a6ce81c8d6b",
+    "repo": {
+      "full_name": "a7ex-turcan/nutrx",
+      "private": false
+    }
+  }
+}

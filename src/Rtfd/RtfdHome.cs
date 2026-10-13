@@ -47,8 +47,7 @@ public sealed class RtfdHome(string root)
 
 /// <summary>
 /// Where rtfd writes: mirrors, run folders, the state store, logs and the status file. The
-/// config's <c>data_dir</c>, else the home (spec decision 40). Nothing writes here before
-/// Phase 1.
+/// config's <c>data_dir</c>, else the home (spec decision 40).
 /// </summary>
 public sealed class DataDirectory(string root)
 {
@@ -56,6 +55,10 @@ public sealed class DataDirectory(string root)
 
     public string MirrorsDirectory => Path.Combine(Root, "mirrors");
     public string RunsDirectory => Path.Combine(Root, "runs");
+    public string WorktreesDirectory => Path.Combine(Root, "worktrees");
+
+    /// <summary>git's empty global config and empty hooks folder (<see cref="Git.GitRunner"/>).</summary>
+    public string GitDirectory => Path.Combine(Root, "git");
     public string StatePath => Path.Combine(Root, "state.db");
     public string LogsDirectory => Path.Combine(Root, "logs");
     public string StatusPath => Path.Combine(Root, "status.json");

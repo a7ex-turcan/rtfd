@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "id": 115229659833,
+      "name": "aot",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/a7ex-turcan/rtfd/actions/runs/38377560106/job/115229659833",
+      "head_sha": "a817cb595f4d11c9091479ee21df5d6511ad524b"
+    },
+    {
+      "id": 115229659731,
+      "name": "build (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/a7ex-turcan/rtfd/actions/runs/38377560106/job/115229659731",
+      "head_sha": "a817cb595f4d11c9091479ee21df5d6511ad524b"
+    },
+    {
+      "id": 115229659324,
+      "name": "build (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/a7ex-turcan/rtfd/actions/runs/38377560106/job/115229659324",
+      "head_sha": "a817cb595f4d11c9091479ee21df5d6511ad524b"
+    }
+  ]
+}

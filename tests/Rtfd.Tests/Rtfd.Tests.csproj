@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Rtfd/Rtfd.csproj" />
+
+    <!-- Built first, not referenced: the tests run it as an agent CLI (FakeAgent.Executable). -->
+    <ProjectReference Include="../FakeAgent/FakeAgent.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

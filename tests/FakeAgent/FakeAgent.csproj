@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A stand-in agent CLI for the tests (plan 1b.5). It is called `claude` so rtfd treats it as
+    the claude CLI (spec decision 41: the kind comes from the executable's name) and renders
+    the real flags, which the tests then read back from what it recorded.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>claude</AssemblyName>
+    <RootNamespace>FakeAgent</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

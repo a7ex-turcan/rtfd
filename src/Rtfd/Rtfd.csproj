@@ -22,4 +22,10 @@
     <InternalsVisibleTo Include="Rtfd.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- gitleaks' rules, converted by scripts/gitleaks-rules.cs, with gitleaks' MIT notice. -->
+    <EmbeddedResource Include="Resources/gitleaks-rules.json" LogicalName="Rtfd.Resources.gitleaks-rules.json" />
+    <EmbeddedResource Include="Resources/gitleaks-LICENSE.txt" LogicalName="Rtfd.Resources.gitleaks-LICENSE.txt" />
+  </ItemGroup>
+
 </Project>

@@ -57,7 +57,7 @@ jobs:
         run: |
           ./publish/rtfd.exe --version
           if ($LASTEXITCODE -ne 0) { throw "--version failed" }
-          ./publish/rtfd.exe validate --config examples/rtfd.yaml
+          ./publish/rtfd.exe validate --config examples/rtfd.yaml --config-only
           if ($LASTEXITCODE -ne 0) { throw "validate refused the example config" }
 
       - name: The published binary refuses what v0 doesn't support, and never echoes a token
@@ -71,7 +71,7 @@ jobs:
           # Hooks aren't built yet.
           $config = (Get-Content examples/rtfd.yaml -Raw) + "    hooks:`n      - name: build`n        command: dotnet build`n"
           Set-Content (Join-Path $home_ rtfd.yaml) $config -NoNewline
-          $out = ./publish/rtfd.exe validate | Out-String
+          $out = ./publish/rtfd.exe validate --config-only | Out-String
           if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.hooks_unsupported') { throw "hooks were not refused:`n$out" }
 
           # A token where a variable name belongs is refused without being shown. Built at run
@@ -79,7 +79,7 @@ jobs:
           $token = 'ghp_' + ('a' * 36)
           $config = (Get-Content examples/rtfd.yaml -Raw) -replace 'token_env: GH_TOKEN', "token_env: $token"
           Set-Content (Join-Path $home_ rtfd.yaml) $config -NoNewline
-          $out = ./publish/rtfd.exe validate 2>&1 | Out-String
+          $out = ./publish/rtfd.exe validate --config-only 2>&1 | Out-String
           if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.token_env_holds_a_token') { throw "the token was not refused:`n$out" }
           if ($out.Contains($token)) { throw "validate echoed the token" }
 

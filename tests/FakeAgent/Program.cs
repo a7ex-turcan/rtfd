@@ -32,6 +32,30 @@ if (args.Contains("--child"))
 
 var scenarioPath = args[scenarioIndex + 1];
 var scenario = JsonNode.Parse(File.ReadAllText(scenarioPath))!.AsObject();
+
+// What `rtfd validate` asks: the version, the help, and the init event of a streaming run.
+if (args.Contains("--version"))
+{
+    Console.Out.Write((scenario["version"]?.GetValue<string>() ?? "9.9.9 (Fake Agent)") + "\n");
+    return 0;
+}
+
+if (args.Contains("--help"))
+{
+    Console.Out.Write(scenario["help"]?.GetValue<string>() ?? "");
+    return 0;
+}
+
+var format = Array.IndexOf(args, "--output-format");
+if (format >= 0 && format + 1 < args.Length && args[format + 1] == "stream-json" && scenario["init"] is JsonObject init)
+{
+    // Like Claude: the init event, then a model call that takes a while. rtfd stops it first.
+    Console.Out.Write(init.ToJsonString() + "\n");
+    Console.Out.Flush();
+    Thread.Sleep(TimeSpan.FromSeconds(scenario["init_then_sleep_s"]?.GetValue<int>() ?? 60));
+    return 0;
+}
+
 var stdin = Console.IsInputRedirected ? Console.In.ReadToEnd() : "";
 
 // Which call this is, kept next to the scenario.

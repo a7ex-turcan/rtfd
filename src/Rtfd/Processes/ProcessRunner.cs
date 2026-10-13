@@ -23,12 +23,22 @@ public sealed record ProcessRequest
 
     /// <summary>Characters kept from each of stdout and stderr; the rest is read and dropped.</summary>
     public int MaxOutputChars { get; init; } = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// When a line of stdout passes this test, the process tree is killed and the result comes
+    /// back with <see cref="ProcessResult.Stopped"/>: for reading what a CLI reports at startup
+    /// without letting it go on to call a model.
+    /// </summary>
+    public Func<string, bool>? StopWhenLine { get; init; }
 }
 
 public sealed record ProcessResult(int ExitCode, string Stdout, string Stderr)
 {
     public bool TimedOut { get; init; }
     public bool StdoutTruncated { get; init; }
+
+    /// <summary>Killed on purpose, because <see cref="ProcessRequest.StopWhenLine"/> matched.</summary>
+    public bool Stopped { get; init; }
 
     /// <summary>Why the process didn't start (missing binary, not executable), or null.</summary>
     public string? StartError { get; init; }
@@ -89,8 +99,8 @@ public static class ProcessRunner
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(request.Timeout);
-            var stdout = new CappedReader(process.StandardOutput, request.MaxOutputChars);
-            var stderr = new CappedReader(process.StandardError, request.MaxOutputChars);
+            var stdout = new CappedReader(process.StandardOutput, request.MaxOutputChars, request.StopWhenLine);
+            var stderr = new CappedReader(process.StandardError, request.MaxOutputChars, null);
             try
             {
                 try
@@ -107,7 +117,15 @@ public static class ProcessRunner
                     // The child exited without reading its input; its exit code says why.
                 }
 
-                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+                var exited = process.WaitForExitAsync(timeout.Token);
+                if (request.StopWhenLine is not null && await Task.WhenAny(exited, stdout.Matched).ConfigureAwait(false) == stdout.Matched)
+                {
+                    Kill(process);
+                    await CappedReader.DrainAsync(stdout, stderr).ConfigureAwait(false);
+                    return new ProcessResult(-1, stdout.Text, stderr.Text) { Stopped = true };
+                }
+
+                await exited.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -136,6 +154,7 @@ public static class ProcessRunner
         var extensions = OperatingSystem.IsWindows()
             ? (environment.GetValueOrDefault("PATHEXT") ?? ".COM;.EXE").Split(';', StringSplitOptions.RemoveEmptyEntries)
                 .Where(e => !e.Equals(".BAT", StringComparison.OrdinalIgnoreCase) && !e.Equals(".CMD", StringComparison.OrdinalIgnoreCase))
+                .Select(e => e.ToLowerInvariant())
                 .Prepend("")
                 .ToArray()
             : [""];
@@ -201,13 +220,20 @@ public static class ProcessRunner
     {
         private readonly StringBuilder _text = new();
         private readonly int _max;
+        private readonly Func<string, bool>? _stopWhen;
+        private readonly TaskCompletionSource _matched = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly Task _reading;
+        private int _scanned;
 
-        public CappedReader(StreamReader reader, int max)
+        public CappedReader(StreamReader reader, int max, Func<string, bool>? stopWhen)
         {
             _max = max;
+            _stopWhen = stopWhen;
             _reading = ReadAsync(reader);
         }
+
+        /// <summary>Completes when a whole line passes the stop test.</summary>
+        public Task Matched => _matched.Task;
 
         public bool Truncated { get; private set; }
 
@@ -237,6 +263,39 @@ public static class ProcessRunner
             }
         }
 
+        /// <summary>Tests each whole line read since the last scan. Called under the lock.</summary>
+        private void ScanLines()
+        {
+            if (_stopWhen is null || _matched.Task.IsCompleted)
+            {
+                return;
+            }
+
+            for (var end = IndexOfNewline(_scanned); end >= 0; end = IndexOfNewline(_scanned))
+            {
+                var line = _text.ToString(_scanned, end - _scanned).TrimEnd('\r');
+                _scanned = end + 1;
+                if (_stopWhen(line))
+                {
+                    _matched.TrySetResult();
+                    return;
+                }
+            }
+        }
+
+        private int IndexOfNewline(int from)
+        {
+            for (var i = from; i < _text.Length; i++)
+            {
+                if (_text[i] == '\n')
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         private async Task ReadAsync(StreamReader reader)
         {
             var buffer = new char[16 * 1024];
@@ -254,6 +313,7 @@ public static class ProcessRunner
                         }
 
                         Truncated |= read > room;
+                        ScanLines();
                     }
                 }
             }

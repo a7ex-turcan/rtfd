@@ -35,8 +35,16 @@ end to end and prints what it would post. The GitHub read side (`Providers/GitHu
 diff model and worktree with its agent-config reset (`Git/`), the allowlisted child environment
 (`Processes/`), the claude adapter and outcome classification (`Agents/`), `rtfd-git`
 (`GitTools/`), the findings contract, validator, secret scanner (bundled gitleaks rules) and
-verdict (`Review/`), and the orchestration and printout (`Runs/`). What's left of Phase 1: tuning
-the prompt on real nutrx PRs with the owner, and the exit run on the sandbox's hostile PR. Update
+verdict (`Review/`), and the orchestration and printout (`Runs/`). The exit run on the sandbox's
+hostile PR passed. What's left: the owner's verdict on the nutrx reviews, and prompt tuning, which
+the owner has put off for later.
+
+**Phase 2 is built** (2026-10-13): `rtfd validate` checks each repo's token and visibility with
+the provider (`Config/ProviderChecks.cs`) and launches each claude agent exactly as a review
+would, reading the init event of `--output-format stream-json` and stopping Claude before it calls
+a model (`Agents/AgentProbe.cs`). On this machine it reports Read, Grep, Glob and rtfd-git's four
+tools, nothing else, with the real user setup (rtfc, plugins, user MCP servers) installed.
+`--config-only` skips the provider and the agent; CI uses it. Next is Phase 3, posting. Update
 this section when a phase lands.
 
 ## Hard rules
@@ -128,8 +136,9 @@ Same stack and conventions as the siblings; rtfc's `AGENTS.md` is the fullest st
 - xUnit v3 on Microsoft.Testing.Platform, opted in through `global.json`. With the .NET 10 SDK,
   `dotnet test` refuses xUnit v3 without that opt-in.
 - Git is never mocked: tests build real repositories in temp folders.
-- Agents are `FakeAgent` unless a test is explicitly about the real CLI. Tests that call a real model
-  are opt-in.
+- Agents are `FakeAgent` unless a test is explicitly about the real CLI. Tests that run the real
+  CLI are opt-in: `RTFD_LIVE_CLAUDE=1` for the isolation tests, which use a scratch
+  `CLAUDE_CONFIG_DIR` and stop Claude before it calls a model.
 - The provider has recorded-response tests; live tests against the sandbox repo need
   `RTFD_LIVE_GITHUB=1`.
 - CI runs on Windows and Linux. Windows is the primary target.
@@ -172,11 +181,29 @@ folder with a stripped environment:
   goes without `--end-of-options` (its revision is rtfd's own SHA). `log`, `diff`, `show`,
   `rev-parse`, `rev-list` and `ls-tree` take it fine.
 
+Checked 2026-10-13 on Claude Code 2.1.296 for Phase 2 (the spec's open question 2):
+
+- The init event arrives in about a second, before any model call and without a login, so
+  `validate` reads it and kills Claude. With rtfd-git attached it lists `mcp__rtfd-git__log`,
+  `show`, `blame` and `diff`, and `mcp_servers` gives each server's `name`, `status` (`connected`,
+  `failed`, `needs-auth`) and `source` (`dynamic` for `--mcp-config`, `user`, `plugin`, and
+  `claudeai` for claude.ai connectors).
+- Without `--restricted` and `--strict-mcp-config`, the same launch on this machine reports 149
+  tools: the user's plugins (rtfc, claude-hud, engineering) and their MCP servers, user MCP servers
+  (linear, sm-timesheet) and claude.ai connectors. With them, none. `--setting-sources` isn't
+  needed: `--restricted` already ignores user, project and local settings.
+- User plugins don't load in `-p` mode with the flags. Three built-in plugins always do
+  (`cc-plugin-agents-md`, `cc-plugin-telemetry`, `cc-plugin-plugin-authoring`) and add no tools.
+- `CLAUDE_CONFIG_DIR` gives a scratch user setup: its `.claude.json` MCP servers show up without
+  the flags (named, `failed`) and not with them. The live tests use it (`RTFD_LIVE_CLAUDE=1`).
+- The debug log (`--debug-file`) says "project memory is off" under `--restricted`; without it,
+  the agents-md plugin searches the working folder's parents for CLAUDE.md files.
+
 Unverified, needed by v0:
 
-- The spec's open question 2: `--setting-sources`; auto memory and output styles under `-p` (the
-  init message says `output_style: default`). Phase 2's `validate` proves these on every run.
-- That `CLAUDE_CONFIG_DIR` gives a scratch user setup.
+- Whether a user-level `~/.claude/CLAUDE.md` loads under the flags: it only shows in the model's
+  context, and checking needs a model call under the user's own login. This machine has none, and
+  `validate` warns when one exists (`agent.user_memory_present`).
 - GitHub: `resolveReviewThread`; one inline comment outside a hunk fails the whole review with a
   422 (Phase 3). Review threads come from GraphQL `reviewThreads` (checked, with recordings).
 
@@ -205,6 +232,9 @@ dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o /some/dir   
 
 # One review, printed instead of posted, from a throwaway home (never the real ~/.rtfd):
 RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/Rtfd -- run nutrx --pr 37 --dry-run --verbose
+
+# The isolation tests against the installed Claude Code, with a scratch user setup (no model call):
+RTFD_LIVE_CLAUDE=1 tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.LiveClaudeIsolationTests
 
 # The rtfd-git guard tests against a built binary over stdio, as CI does with the AOT one:
 RTFD_BINARY=src/Rtfd/bin/Debug/net10.0/rtfd.exe tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.GitToolsTests

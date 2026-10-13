@@ -10,7 +10,8 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 
 **Status: early. It reviews, but doesn't post yet.** `rtfd run <repo> --pr <n> --dry-run` runs
 a real review of a GitHub PR with Claude Code and prints exactly what it would post; `rtfd validate`
-checks a config. Posting arrives in Phase 3 of the plan. The design is
+checks the config, the tokens and exactly what the agent loads. Posting arrives in Phase 3 of the
+plan. The design is
 [`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
 
 ---
@@ -96,9 +97,28 @@ Then:
 rtfd validate
 ```
 
-Every mistake comes with its line number (`error [config.unknown_key] line 14, repos[0].promt:
-...`), and the command exits non-zero until there are none. A warning that `GH_TOKEN is not set`
-means the variable isn't in this shell.
+It checks three things, and exits non-zero until there are no errors:
+
+- **The config.** Every mistake comes with its line number (`error [config.unknown_key] line 14,
+  repos[0].promt: ...`). A warning that `GH_TOKEN is not set` means the variable isn't in this shell.
+- **Each repo**, with GitHub: the token works, the repo is reachable, and who rtfd reads and will
+  post as.
+- **Each agent.** rtfd starts Claude exactly as a review would and prints what Claude itself
+  reports it loaded, then stops it before it calls a model, so it costs nothing.
+
+For the agent, the output looks like this:
+
+```text
+Agents:
+  claude: 2.1.296 (Claude Code) (C:\Users\you\.local\bin\claude.exe)
+    tools: Glob, Grep, Read; rtfd-git: blame, diff, log, show
+    MCP servers: rtfd-git (connected)
+    plugins: none; built into the CLI: cc-plugin-agents-md, cc-plugin-telemetry, cc-plugin-plugin-authoring
+    skills: none; commands: none
+```
+
+Anything more (a shell, a write tool, one of your MCP servers or plugins) is an error that names
+it. `--config-only` skips the GitHub and agent checks.
 
 ### 4. Run a review
 
@@ -173,6 +193,8 @@ points elsewhere.
 | `the agent isn't logged in` | Run `claude` and log in |
 | `Usage limit: ... would pause until ...` | Your Claude plan's limit; run again after the time it gives |
 | `GitHub refused the token (401)` | The token expired, or can't see the repo |
+| `agent.tool_unexpected`, `agent.mcp_unexpected`, `agent.plugin_unexpected` | Something from outside rtfd loads into Claude. Please report it, with the `validate` output |
+| `agent.flag_missing` | Your Claude Code is too old for a flag rtfd needs: update it |
 | Folders left in `runs/` or `worktrees/` after a crash | Safe to delete |
 
 ---
@@ -211,8 +233,8 @@ A PR is untrusted input, and the agent reads it. So the agent gets as little as 
 - **No shell.** Git history comes through `rtfd-git`, a tiny tool server with four read commands,
   checked arguments and fixed command lines.
 - **Nothing from your setup.** No plugins, no MCP servers of yours, no built-in ones, and an
-  environment built from an allowlist. `rtfd validate` will print exactly which tools each agent
-  ends up with.
+  environment built from an allowlist. `rtfd validate` prints exactly which tools each agent ends
+  up with, as the CLI reports them, and fails on anything extra.
 - **No configuration from the PR.** Agent settings and instruction files in the checkout are reset to
   the base branch before the agent starts, and a PR that changes them gets a finding of its own.
 - **A check on the way out.** Every comment is scanned for secrets before posting. A credential the PR
@@ -246,7 +268,7 @@ each one is in the spec.
 
 | Command | What it does | |
 |---|---|---|
-| `rtfd validate` | Checks the config, the tokens and the agents, and prints each agent's tools | Config checks now; tokens and agents in Phase 2 |
+| `rtfd validate` | Checks the config, the tokens and the agents, and prints each agent's tools | Built |
 | `rtfd run <repo> --pr 12 --dry-run` | One review now, printed instead of posted | Built |
 | `rtfd run <repo> --pr 12` | One review now, posted | Phase 3 |
 | `rtfd retry <repo> --pr 12` | Gives a PR its attempts back | Phase 3 |

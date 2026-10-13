@@ -5,18 +5,11 @@ namespace Rtfd.Config;
 /// <summary>
 /// Checks a well-formed config against what this build supports and the guards rtfd never
 /// relaxes (spec core decision 2, "Policy"). Each check has a name, so it can be cited and
-/// tested. The checks that need the provider or the agent CLI are listed in
-/// <see cref="NotYetRun"/>; they run from Phase 2.
+/// tested. The checks that need the provider are <see cref="ProviderChecks"/>, and the ones
+/// that need the agent CLI are <see cref="Agents.AgentProbe"/>.
 /// </summary>
 public static partial class ConfigChecks
 {
-    public static readonly IReadOnlyList<string> NotYetRun =
-    [
-        "that each token works, and whose it is (the provider's whoami)",
-        "authors: [\"*\"] on a public repo (needs the repo's visibility)",
-        "the agent binaries, and the full list of tools each agent ends up with",
-    ];
-
     public static IReadOnlyList<Diagnostic> Run(RtfdConfig config, Func<string, string?> environment)
     {
         var report = new Report(config);

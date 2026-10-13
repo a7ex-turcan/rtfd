@@ -98,6 +98,42 @@ public static class ClaudeAdapter
         },
     }.ToJsonString();
 
+    /// <summary>
+    /// A review's command line, but streaming: <c>stream-json --verbose</c> starts with an init
+    /// event that lists the tools, MCP servers, plugins and skills Claude loaded (checked on
+    /// 2.1.296). <c>rtfd validate</c> reads it and stops Claude before it calls a model.
+    /// </summary>
+    public static IReadOnlyList<string> ProbeArguments(AgentConfig agent, AgentRunPaths paths)
+    {
+        var arguments = Arguments(agent, paths).ToList();
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (arguments[i] == "--output-format" && i + 1 < arguments.Count)
+            {
+                arguments[i + 1] = "stream-json";
+            }
+            else if (arguments[i].StartsWith("--output-format=", StringComparison.Ordinal))
+            {
+                arguments[i] = "--output-format=stream-json";
+            }
+        }
+
+        if (!arguments.Contains("--verbose"))
+        {
+            arguments.Add("--verbose");
+        }
+
+        return arguments;
+    }
+
+    /// <summary>The flags rtfd itself puts on the command line, which the installed CLI must know.</summary>
+    public static IReadOnlyList<string> RenderedFlags(AgentConfig agent)
+    {
+        var bare = agent with { Command = [agent.Command[0]] };
+        var paths = new AgentRunPaths("run", "worktree", "prompt", "settings", "mcp");
+        return [.. ProbeArguments(bare, paths).Where(a => a.StartsWith("--", StringComparison.Ordinal)).Select(a => a.Split('=')[0]).Distinct()];
+    }
+
     private static bool Has(List<string> arguments, string flag) =>
         arguments.Any(a => a == flag || a.StartsWith(flag + "=", StringComparison.Ordinal));
 }

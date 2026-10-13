@@ -80,7 +80,8 @@ public static class EntryPoint
         rtfd {Version}
         usage: rtfd <command> [args]
 
-          validate [--config <path>]       check the config; provider and agent checks come in Phase 2
+          validate [--config <path>]       check the config, the tokens and repos, and what each agent
+              [--config-only]              loads; --config-only stops after the config
           run <repo> --pr <n> --dry-run    one review now, printed instead of posted
               [--inputs-only] [--keep] [--verbose] [--config <path>]
           retry <repo> --pr <n>            give a PR its attempts back (Phase 3)

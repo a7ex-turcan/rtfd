@@ -33,3 +33,8 @@ Nothing released yet. The design is in `docs/spec.md` and the build order in `do
 - rtfd decides the verdict from the findings and writes the review's first line itself ("Not
   ready: 1 Should open." or "Ready to merge from my side.").
 - A usage limit is recognised, with its reset time and zone, and doesn't count as a failed attempt.
+- `rtfd validate` now checks each repo with GitHub (the token works, the repo is reachable, who
+  rtfd posts as, and `authors: ["*"]` refused on a public repo) and each agent: it starts Claude
+  exactly as a review would, prints everything Claude reports it loaded, and fails on any tool,
+  MCP server, plugin or skill beyond rtfd's own. It stops Claude before any model call.
+  `--config-only` skips both.

@@ -335,6 +335,12 @@ threads (v1).
 **Goal:** on this machine and the installed CLI versions, prove that each agent sees exactly the
 tools rtfd meant, and that the config and tokens are sound.
 
+**Status (2026-10-13): done.** All four exit criteria pass: `rtfd validate` on this machine lists
+Read, Grep, Glob and rtfd-git's four tools and nothing else; the live test with a scratch
+`CLAUDE_CONFIG_DIR` names its MCP server once the isolation flags are removed; a bad token fails on
+each repo by name and `authors: ["*"]` on nutrx is refused; the answers are in CLAUDE.md. The probe
+stops Claude at its init event, so it costs no model call (spec decision 48).
+
 ### Scope
 
 1. **Checks that need the provider:** whoami per repo (the token works, and this is who rtfd posts
@@ -366,8 +372,9 @@ tools rtfd meant, and that the config and tokens are sound.
 
 - ⚠ The init event's fields can change between versions. If validate can't read the tool list, it
   fails closed.
-- ❓ **The spec's open question 3** (a dedicated OS account). Decide here, from what validate finds:
-  if flags can't keep the user's `CLAUDE.md` or memory out, a separate account is the fix.
+- ✔ **The spec's open question 3** (a dedicated OS account): not for v0 (spec decision 47). The
+  flags keep out everything validate can see, and project memory is off; a user-level
+  `~/.claude/CLAUDE.md` can't be seen without a model call, so validate warns when one exists.
 
 ---
 

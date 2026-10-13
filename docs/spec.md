@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate` and `rtfd run --dry-run` exist; nothing posts yet.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate` (config, tokens, agents) and `rtfd run --dry-run` exist; nothing posts yet.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -535,9 +535,14 @@ From building Phase 1:
 45. **Committed credentials are found in the diff as well as in the outgoing text.** The scan of the diff's added lines makes sure the credential Should is there even when the agent never mentions the credential.
 46. **The findings contract is rtfd's, not the prompt file's.** rtfd appends where the inputs are and the schema with an example to the repo's prompt file, so editing the prompt can't break the contract, and the contract always matches the binary that validates it. The prompt file holds the job, the conventions and the tone.
 
+From building Phase 2:
+
+47. **No dedicated OS account for v0** (open question 3). The flags keep everything `rtfd validate` can see out of the agent, and validate proves it on every run: no user plugins, MCP servers, connectors, skills, commands, settings or hooks, and project memory is off. The one thing it can't see is a user-level `~/.claude/CLAUDE.md`, which only shows in the model's context. The owner has none, and validate warns when one exists. A separate account becomes the fix if one is needed, or if a CLI update starts loading something the flags can't stop.
+48. **`validate` stops the agent at its init event.** It launches the agent exactly as a review does, reads what the CLI reports it loaded, and kills it before any model call. So the check costs nothing, needs no login, and runs on every `validate`. Not being able to read the event is an error: it fails closed.
+
 ## Open questions
 
 1. **The name.** "rtfd" was Read the Docs' old GitHub org name. Check the NuGet package id and the binary name before settling on it. *(2026-10-13: the NuGet id `rtfd` is free, and `a7ex-turcan/rtfd` was free and now holds this repo. The siblings ship through GitHub Releases only, so the NuGet id matters little.)*
-2. **Isolation flags on the installed CLI versions.** For Claude: `--strict-mcp-config`, `--setting-sources`, and whether user plugins load in `-p` mode. For Copilot: the flag that disables the built-in GitHub MCP server, and whether `-p` mode refuses every tool that isn't explicitly allowed. `rtfd validate` should prove each answer, not trust it.
-3. **A dedicated OS account for the service**, as a fallback or as the default. Running `rtfd serve` under its own local account gives the agent CLIs an empty user setup by construction, and no access to the user's home directory. The cost: logging each agent CLI in under that account.
+2. **Isolation flags on the installed CLI versions.** For Claude: `--strict-mcp-config`, `--setting-sources`, and whether user plugins load in `-p` mode. For Copilot: the flag that disables the built-in GitHub MCP server, and whether `-p` mode refuses every tool that isn't explicitly allowed. `rtfd validate` should prove each answer, not trust it. *(Claude, 2026-10-13, Claude Code 2.1.296: `--restricted` with `--strict-mcp-config` keeps out user plugins, user and plugin MCP servers, claude.ai connectors, skills, commands and settings; `--setting-sources` isn't needed. `rtfd validate` proves it on every run from the CLI's own init event; details in CLAUDE.md. Copilot stays open until v1.)*
+3. **A dedicated OS account for the service**, as a fallback or as the default. Running `rtfd serve` under its own local account gives the agent CLIs an empty user setup by construction, and no access to the user's home directory. The cost: logging each agent CLI in under that account. *(Not for v0: decision 47.)*
 4. **Bitbucket without a marker.** A lost state store turns rtfd's older threads read-only there (decision 35). Acceptable, or is it worth backing up the store?

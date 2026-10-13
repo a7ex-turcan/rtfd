@@ -20,7 +20,7 @@ public class ValidateCommandTests
         using var temp = new TempHome();
         temp.Set("GH_TOKEN", "set").WriteConfig(Configs.Minimal());
 
-        var (code, stdout, _) = temp.Run("validate");
+        var (code, stdout, _) = temp.Run("validate", "--config-only");
 
         Assert.Equal(EntryPoint.Ok, code);
         Assert.Contains($"Config: {temp.ConfigPath}", stdout);
@@ -52,21 +52,22 @@ public class ValidateCommandTests
         var path = Path.Combine(elsewhere, "work.yaml");
         File.WriteAllText(path, Configs.Minimal());
 
-        var (code, stdout, _) = temp.Run("validate", "--config", path);
+        var (code, stdout, _) = temp.Run("validate", "--config", path, "--config-only");
 
         Assert.Equal(EntryPoint.Ok, code);
         Assert.Contains($"Config: {path}", stdout);
     }
 
     [Fact]
-    public void Validate_lists_the_checks_that_wait_for_phase_2()
+    public void Validate_checks_tokens_and_agents_only_once_the_config_has_no_errors()
     {
         using var temp = new TempHome();
-        temp.WriteConfig(Configs.Minimal());
+        temp.Set("GH_TOKEN", "set").WriteConfig(Configs.Minimal(repoExtra: "    promt: x"));
 
-        var (_, stdout, _) = temp.Run("validate");
+        var (code, stdout, _) = temp.Run("validate");
 
-        Assert.Contains("Not checked until Phase 2:", stdout);
-        Assert.Contains("whoami", stdout);
+        Assert.Equal(EntryPoint.Failure, code);
+        Assert.DoesNotContain("Repos:", stdout);
+        Assert.Contains("checked once the config has no errors", stdout);
     }
 }

@@ -322,6 +322,37 @@ public sealed class ReviewRunTests : IDisposable
         Assert.False(plan.Verdict.Ready);
     }
 
+    [Fact]
+    public async Task rtfd_adds_no_second_Should_where_the_agent_raised_one()
+    {
+        var fakeToken = Tokens.GitHubLike();
+        _h.Git.Checkout("feature");
+        var head = _h.Git.Commit("Plant", new Dictionary<string, string?>
+        {
+            [".mcp.json"] = "{\"mcpServers\": {}}\n",
+            ["src/config.py"] = $"GITHUB_TOKEN = \"{fakeToken}\"\n",
+        });
+        _h.Git.Checkout("main");
+        _h.Agent.Responds(FakeAgent.Findings($$"""
+            {
+              "schema_version": 1,
+              "summary": "Planted config and a token.",
+              "findings": [
+                {"severity": "should", "path": ".mcp.json", "anchor": "mcpServers", "body": "Should: drop this MCP config."},
+                {"severity": "should", "path": "src/config.py", "anchor": "GITHUB_TOKEN = ", "body": "Should: this commits {{fakeToken}}; revoke it."}
+              ]
+            }
+            """));
+
+        var report = await _h.RunAsync(_h.Request(_pr with { HeadSha = head }));
+
+        var plan = report.Plan!;
+        Assert.DoesNotContain(plan.Inline, c => c.ByRtfd);
+        Assert.Equal(2, plan.Inline.Count);
+        Assert.Contains("ghp_…REDACTED", plan.Inline.Single(c => c.Path == "src/config.py").Body, StringComparison.Ordinal);
+        Assert.Equal("Not ready: 2 Shoulds open.", plan.Summary.Split('\n')[0]);
+    }
+
     private static bool IsGone(int pid)
     {
         for (var i = 0; i < 50; i++)

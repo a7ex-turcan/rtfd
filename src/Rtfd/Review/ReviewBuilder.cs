@@ -176,6 +176,12 @@ public static class ReviewBuilder
             {
                 // Always a Should (spec decision 29): it runs on the machine of anyone who opens the repo with that agent.
                 var body = $"Should: this {verb} agent configuration that can run code (`{change.Path}`): hooks, tools, permissions or MCP servers apply to anyone who opens the repo with that agent. It needs its own careful review.";
+                // The agent raised it already: one Should on the file is the guarantee, two is noise.
+                if (inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == change.Path))
+                {
+                    continue;
+                }
+
                 var line = change.Change == FileChange.Deleted ? null : FirstAddedLine(context.Diff.Find(change.Path));
                 if (line is { } l)
                 {
@@ -194,7 +200,10 @@ public static class ReviewBuilder
         }
     }
 
-    /// <summary>A credential on an added line gets rtfd's own Should on that line, whatever the agent said.</summary>
+    /// <summary>
+    /// A credential on an added line gets a Should on that line: rtfd's own, unless the agent
+    /// already put one there. The secret is redacted either way.
+    /// </summary>
     private static HashSet<string> AddCommittedCredentials(DiffModel diff, SecretScanner scanner, List<InlineComment> inline)
     {
         var found = new HashSet<string>(StringComparer.Ordinal);
@@ -204,7 +213,8 @@ public static class ReviewBuilder
             {
                 foreach (var match in scanner.Scan(line.Text, file.Path))
                 {
-                    if (found.Add(match.Secret))
+                    var raised = inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == file.Path && c.Line == line.NewLine);
+                    if (found.Add(match.Secret) && !raised)
                     {
                         inline.Add(new InlineComment(FindingSeverity.Should, file.Path, line.NewLine!.Value, DiffSide.New, CredentialBody(match.Secret), ByRtfd: true));
                     }

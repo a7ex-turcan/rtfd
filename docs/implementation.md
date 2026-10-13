@@ -18,6 +18,11 @@ outside it blocks the post.
 The cost is the false positives gitleaks has anyway, such as a test fixture with a key-shaped
 string. That is a Should the author can resolve by hand, which beats a credential going unremarked.
 
+Where the agent already put a Should on the credential's line, rtfd doesn't add its own: the
+first real run on the sandbox's hostile PR said everything twice. The same goes for agent
+configuration: rtfd's Should on an executable config file is left out when the agent raised a
+Should on that file. The guarantee is one Should, and redaction applies to the agent's text too.
+
 ### The findings contract lives in the binary (spec decision 46)
 
 The plan had the prompt file carry the schema and the input paths. Instead `PromptRenderer`

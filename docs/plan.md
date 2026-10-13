@@ -151,8 +151,11 @@ The provider, git, agents, posting, state.
 result, the computed verdict and the exact review it would post, for real PRs, with every guard in
 place. Then the prompt is tuned until the output reads like a review the owner would post.
 
-**Status (2026-10-13):** 1a to 1d are built and tested, and real dry runs work on nutrx. 1e's
-tuning and the exit run on the sandbox's hostile PR are under way; the owner judges the reviews.
+**Status (2026-10-13):** 1a to 1e are built. Every exit criterion below passes except the first,
+which is the owner's call: dry runs of nutrx PRs 35, 37 and 39 are waiting for their verdict. The
+hostile PR is `a7ex-turcan/rtfd-sandbox#1`; its real run left no marker file, the base CLAUDE.md,
+no settings.json or .mcp.json, the symlink as a plain file, and a not-ready review with the config,
+instructions and credential findings.
 
 Built in five steps, each ending in something that runs.
 

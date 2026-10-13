@@ -86,7 +86,7 @@ public sealed class McpServer(GitToolset tools, TextReader input, TextWriter out
 
     private async Task<JsonObject> CallAsync(JsonObject? parameters, CancellationToken cancellationToken)
     {
-        var arguments = parameters?["arguments"] as JsonObject ?? [];
+        var arguments = parameters?["arguments"] as JsonObject ?? new JsonObject();
         try
         {
             var text = (parameters?["name"] as JsonValue)?.GetValue<string>() switch
@@ -130,7 +130,9 @@ public sealed class McpServer(GitToolset tools, TextReader input, TextWriter out
         _ => throw new ToolRefusal($"'{name}' must be a whole number"),
     };
 
-    private static JsonArray Describe() =>
+    // The params constructor, not a collection expression: that compiles to JsonArray.Add<T>,
+    // which needs reflection and fails the Native AOT publish.
+    private static JsonArray Describe() => new(
     [
         Tool("log", "Commits on this PR, newest first, with the files each touched. With a path: that path's history from the PR head.",
             new JsonObject
@@ -158,7 +160,7 @@ public sealed class McpServer(GitToolset tools, TextReader input, TextWriter out
                 ["to"] = new JsonObject { ["type"] = "string", ["description"] = "A commit of this PR or the merge base." },
                 ["path"] = new JsonObject { ["type"] = "string", ["description"] = "A path relative to the repo root." },
             }, ["from", "to"]),
-    ];
+    ]);
 
     private static JsonObject Tool(string name, string description, JsonObject properties, string[] required) => new()
     {

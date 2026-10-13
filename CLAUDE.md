@@ -211,9 +211,11 @@ RTFD_BINARY=src/Rtfd/bin/Debug/net10.0/rtfd.exe tests/Rtfd.Tests/bin/Debug/net10
 ```
 
 The AOT publish needs the MSVC linker (Visual Studio's "Desktop development with C++"). This
-machine doesn't have it, so the AOT build and the checks against the published binary run in CI
-(the `aot` job); the IL compiler step still runs locally and reports trim and AOT warnings before
-the link fails. `GH_TOKEN="$(gh auth token)"` keeps the token out of files and shell history; never
+machine doesn't have it, and the publish checks for the linker *before* the IL compiler runs, so
+locally nothing reports ILC's trim and AOT errors. The `aot` job in CI is the only gate for them,
+and it has caught one the build's analyzers missed: a collection expression that builds a
+`JsonArray` compiles to `JsonArray.Add<T>`, which needs reflection. Use the `new JsonArray(...)`
+constructor instead. `GH_TOKEN="$(gh auth token)"` keeps the token out of files and shell history; never
 paste one into a command.
 
 ## Commits, changelog and versions

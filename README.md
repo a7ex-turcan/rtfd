@@ -8,18 +8,18 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 [rtfq](https://github.com/a7ex-turcan/rtfq) (databases) and
 [rtfc](https://github.com/a7ex-turcan/rtfc) (relay between sessions).
 
-**Status: early. It reviews, but doesn't post yet.** `rtfd run <repo> --pr <n> --dry-run` runs
-a real review of a GitHub PR with Claude Code and prints exactly what it would post; `rtfd validate`
-checks the config, the tokens and exactly what the agent loads. Posting arrives in Phase 3 of the
-plan. The design is
+**Status: early. It reviews and posts, one PR at a time.** `rtfd run <repo> --pr <n>` reviews a
+GitHub PR with Claude Code and posts the review once, crash-safe, then reads it back; `--dry-run`
+prints it instead. `rtfd validate` checks the config, the tokens and exactly what the agent loads.
+Watching PRs on its own (`serve`) and follow-up reviews come next. The design is
 [`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
 
 ---
 
 ## Getting started
 
-This gets you from a clone to a review of one of your PRs, printed in the terminal. Nothing is
-posted to GitHub.
+This gets you from a clone to a review of one of your PRs: printed in the terminal first, then
+posted when you're happy with it.
 
 ### What you need
 
@@ -157,7 +157,7 @@ Dry run: nothing was posted.
 
 | Flag | What it does |
 |---|---|
-| `--dry-run` | Required for now: print the review instead of posting it |
+| `--dry-run` | Print the review instead of posting it. Records nothing and counts no attempt |
 | `--verbose` | Also print the agent's raw answer, with secrets redacted |
 | `--inputs-only` | Stop before the agent: just the PR, the diff and the files rtfd would hand over |
 | `--keep` | Leave the run folder and the worktree on disk, and print where they are |
@@ -165,7 +165,30 @@ Dry run: nothing was posted.
 
 The command exits 0 when a review came out, and 1 when it didn't; the last line says why.
 
-### 5. Make the reviews yours
+### 5. Post it
+
+Without `--dry-run`, the same command posts:
+
+```bash
+rtfd run myapp --pr 12
+```
+
+```text
+Posted the review as COMMENT, with 2 inline comments. https://github.com/you/myapp/pull/12#pullrequestreview-...
+Read back from GitHub: the summary, the event and every inline comment are there as sent.
+```
+
+- **Once per head.** A PR head that has a review is refused until a new push. If rtfd dies
+  mid-post, the next run finds the review on GitHub by the hash of its text and doesn't post it
+  again, or posts what it had recorded if it never landed.
+- **Attempts.** Each head gets `max_attempts` agent runs (3 by default). When they're used up,
+  `rtfd retry myapp --pr 12` gives them back. The same command lifts the block on a head whose
+  review held a secret that wasn't in the diff, once you've looked.
+- **The verdict.** It posts as COMMENT unless `verdicts` allows more, and never approves or
+  requests changes on a PR the token's own account wrote: GitHub forbids it, so rtfd downgrades it
+  to a comment and says so.
+
+### 6. Make the reviews yours
 
 `prompts/review.md` is the reviewer's brief: what to look at, how severe is severe, and how to
 write. rtfd re-reads it on every run, so edit it and run the same PR again until the review reads
@@ -181,6 +204,7 @@ points elsewhere.
 |---|---|
 | `mirrors/` | A bare git mirror per repo, fetched into on every run |
 | `runs/`, `worktrees/` | One run's working folder and checkout. Deleted when the run ends, unless `--keep` |
+| `state.db` | What rtfd posted, with the hash of every body, and the attempts used per head |
 | `git/` | An empty git config and hooks folder, so your own git setup never applies |
 
 ### When something goes wrong
@@ -269,9 +293,8 @@ each one is in the spec.
 | Command | What it does | |
 |---|---|---|
 | `rtfd validate` | Checks the config, the tokens and the agents, and prints each agent's tools | Built |
-| `rtfd run <repo> --pr 12 --dry-run` | One review now, printed instead of posted | Built |
-| `rtfd run <repo> --pr 12` | One review now, posted | Phase 3 |
-| `rtfd retry <repo> --pr 12` | Gives a PR its attempts back | Phase 3 |
+| `rtfd run <repo> --pr 12` | One review now, posted once and read back; `--dry-run` prints it instead | Built |
+| `rtfd retry <repo> --pr 12` | Gives a PR its attempts back, or lifts a secret block | Built |
 | `rtfd serve` | One long-running process for every configured repo | Phase 5 |
 | `rtfd status` | Per repo: alive, last poll, open PRs, last review, attempts left. Per agent account: paused until | Phase 5 |
 | `rtfd pause` / `rtfd resume <repo>` | Stops and restarts watching one repo | Phase 5 |

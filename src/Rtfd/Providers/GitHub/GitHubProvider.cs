@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Rtfd.Config;
 using Rtfd.Git;
 
 namespace Rtfd.Providers.GitHub;
@@ -168,6 +169,69 @@ public sealed class GitHubProvider : IProvider, IDisposable
         return new FetchSource($"https://github.com/{_slug}.git", $"refs/pull/{pullRequest.Number}/head", new GitCredential($"AUTHORIZATION: basic {basic}"));
     }
 
+    public async Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default)
+    {
+        var request = new GhReviewRequest(post.CommitId, post.Body, EventName(post.Event),
+            [.. post.Comments.Select(c => new GhReviewCommentRequest(c.Path, c.Line, c.Side == DiffSide.New ? "RIGHT" : "LEFT", c.Body))]);
+        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, $"repos/{_slug}/pulls/{post.Number}/reviews")
+        {
+            Content = JsonContent.Create(request, GitHubJson.Default.GhReviewRequest),
+        }, cancellationToken, idempotent: false).ConfigureAwait(false);
+
+        var review = await ReadAsync(response, GitHubJson.Default.GhReview, cancellationToken).ConfigureAwait(false);
+        return Map(review, []);
+    }
+
+    public async Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default)
+    {
+        GhReview review;
+        try
+        {
+            review = await GetAsync($"repos/{_slug}/pulls/{number}/reviews/{reviewId}", GitHubJson.Default.GhReview, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ProviderException ex) when (ex.Status == 404)
+        {
+            return null;
+        }
+
+        var comments = new List<GhReviewComment>();
+        string? next = $"repos/{_slug}/pulls/{number}/reviews/{reviewId}/comments?per_page=100";
+        while (next is not null)
+        {
+            using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, next), cancellationToken).ConfigureAwait(false);
+            comments.AddRange(await ReadAsync(response, GitHubJson.Default.ListGhReviewComment, cancellationToken).ConfigureAwait(false));
+            next = NextLink(response);
+        }
+
+        return Map(review, comments);
+    }
+
+    public async Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default)
+    {
+        var reviews = new List<PostedReview>();
+        string? next = $"repos/{_slug}/pulls/{number}/reviews?per_page=100";
+        while (next is not null)
+        {
+            using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, next), cancellationToken).ConfigureAwait(false);
+            reviews.AddRange((await ReadAsync(response, GitHubJson.Default.ListGhReview, cancellationToken).ConfigureAwait(false)).Select(r => Map(r, [])));
+            next = NextLink(response);
+        }
+
+        return reviews;
+    }
+
+    private static string EventName(Verdict verdict) => verdict switch
+    {
+        Verdict.Approve => "APPROVE",
+        Verdict.RequestChanges => "REQUEST_CHANGES",
+        _ => "COMMENT",
+    };
+
+    private static PostedReview Map(GhReview review, IReadOnlyList<GhReviewComment> comments) => new(
+        review.Id.ToString(CultureInfo.InvariantCulture), review.User?.Login ?? "ghost", review.State, review.Body ?? "",
+        review.CommitId, review.SubmittedAt, review.HtmlUrl,
+        [.. comments.Select(c => new PostedComment(c.Id.ToString(CultureInfo.InvariantCulture), c.Path, c.Line, c.Body))]);
+
     public void Dispose() => _http.Dispose();
 
     private static PullRequest Map(GhPull pull) => new()
@@ -207,8 +271,13 @@ public sealed class GitHubProvider : IProvider, IDisposable
         }
     }
 
-    /// <summary>Sends with the token, retrying 5xx, 429, secondary rate limits and network errors.</summary>
-    private async Task<HttpResponseMessage> SendAsync(Func<HttpRequestMessage> create, CancellationToken cancellationToken)
+    /// <summary>
+    /// Sends with the token. A read retries 5xx, 429, secondary rate limits and network errors.
+    /// A request that isn't <paramref name="idempotent"/> (posting a review) retries only a rate
+    /// limit, which GitHub answers before doing anything; after a 5xx or a dropped connection the
+    /// review may have landed, so that's for the write-ahead record to find out, not a retry.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(Func<HttpRequestMessage> create, CancellationToken cancellationToken, bool idempotent = true)
     {
         for (var attempt = 1; ; attempt++)
         {
@@ -219,18 +288,22 @@ public sealed class GitHubProvider : IProvider, IDisposable
             {
                 response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             }
-            catch (HttpRequestException ex) when (attempt < MaxAttempts)
+            catch (HttpRequestException) when (idempotent && attempt < MaxAttempts)
             {
-                _ = ex;
                 await _delay(Backoff(attempt), cancellationToken).ConfigureAwait(false);
                 continue;
             }
             catch (HttpRequestException ex)
             {
-                throw new ProviderException($"can't reach GitHub: {ex.Message}");
+                throw new ProviderException($"can't reach GitHub: {ex.Message}") { MayHaveLanded = !idempotent };
             }
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                if (!idempotent)
+                {
+                    throw new ProviderException("GitHub didn't answer in time") { MayHaveLanded = true };
+                }
+
                 if (attempt < MaxAttempts)
                 {
                     await _delay(Backoff(attempt), cancellationToken).ConfigureAwait(false);
@@ -248,25 +321,32 @@ public sealed class GitHubProvider : IProvider, IDisposable
             var status = (int)response.StatusCode;
             var message = await ErrorMessageAsync(response, cancellationToken).ConfigureAwait(false);
             var wait = RetryWait(response, message, attempt);
+            var limited = IsRateLimited(response, message);
             response.Dispose();
-            if (wait is { } delay && attempt < MaxAttempts)
+            if (wait is { } delay && attempt < MaxAttempts && (idempotent || limited))
             {
                 await _delay(delay, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
-            throw new ProviderException(Describe(status, request.RequestUri?.OriginalString ?? "", message), status);
+            throw new ProviderException(Describe(status, request.RequestUri?.OriginalString ?? "", message), status)
+            {
+                MayHaveLanded = !idempotent && status >= 500,
+            };
         }
     }
 
     /// <summary>How long to wait before retrying, or null when retrying won't help.</summary>
+    private static bool IsRateLimited(HttpResponseMessage response, string message) =>
+        response.StatusCode == HttpStatusCode.TooManyRequests
+        || (response.StatusCode == HttpStatusCode.Forbidden && (response.Headers.RetryAfter is not null
+            || message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || Header(response, "x-ratelimit-remaining") == "0"));
+
     private static TimeSpan? RetryWait(HttpResponseMessage response, string message, int attempt)
     {
         var status = response.StatusCode;
-        var rateLimited = status == HttpStatusCode.TooManyRequests
-            || (status == HttpStatusCode.Forbidden && (response.Headers.RetryAfter is not null
-                || message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
-                || Header(response, "x-ratelimit-remaining") == "0"));
+        var rateLimited = IsRateLimited(response, message);
 
         if (!rateLimited && (int)status < 500)
         {
@@ -298,7 +378,11 @@ public sealed class GitHubProvider : IProvider, IDisposable
         try
         {
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return JsonSerializer.Deserialize(text, GitHubJson.Default.GhError)?.Message ?? "";
+            var error = JsonSerializer.Deserialize(text, GitHubJson.Default.GhError);
+
+            // A 422 says what was wrong in `errors`, such as a comment on a line outside the diff.
+            var details = error?.Errors?.Select(e => e.Message ?? string.Join(' ', new[] { e.Resource, e.Field, e.Code }.Where(p => p is not null))).Where(d => d.Length > 0).ToList() ?? [];
+            return string.Join("; ", new[] { error?.Message ?? "" }.Concat(details).Where(p => p.Length > 0));
         }
         catch (Exception ex) when (ex is JsonException or HttpRequestException)
         {

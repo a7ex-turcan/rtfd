@@ -34,6 +34,23 @@ public sealed record RunRequest
     public TimeProvider Clock { get; init; } = TimeProvider.System;
     public TimeZoneInfo Zone { get; init; } = TimeZoneInfo.Local;
     public Func<TimeSpan, Task> Delay { get; init; } = t => Task.Delay(t);
+
+    /// <summary>The state store's say in a live run: whether this head may be reviewed, and each attempt counted.</summary>
+    public IRunHooks? Hooks { get; init; }
+}
+
+/// <param name="Refusal">Why the head isn't reviewed (already reviewed, attempts used up, blocked), or null.</param>
+/// <param name="Attempts">How many agent attempts this run may use.</param>
+public sealed record RunGate(string? Refusal, int Attempts);
+
+/// <summary>What a live run tells the state store, and what the store tells it back (plan Phase 3).</summary>
+public interface IRunHooks
+{
+    /// <summary>Once the head and the prompt are known, before the worktree and the agent.</summary>
+    Task<RunGate> BeforeReviewAsync(PullRequest pullRequest, ReviewCommits commits, string promptHash, CancellationToken cancellationToken);
+
+    /// <summary>After each agent attempt. A usage limit doesn't count (spec "Agent adapter").</summary>
+    Task AttemptFinishedAsync(OutcomeKind kind, CancellationToken cancellationToken);
 }
 
 /// <param name="RawText">What the agent answered, with every secret rtfd found redacted.</param>
@@ -143,6 +160,19 @@ public static class ReviewRun
             }
 
             report.PromptHash = PromptRenderer.Hash(promptFile);
+            var attempts = repo.Settings.MaxAttempts;
+            if (request.Hooks is { } hooks && !request.InputsOnly)
+            {
+                var gate = await hooks.BeforeReviewAsync(pr, commits, report.PromptHash, cancellationToken).ConfigureAwait(false);
+                if (gate.Refusal is { } refused)
+                {
+                    report.Refused = refused;
+                    return report;
+                }
+
+                attempts = gate.Attempts;
+            }
+
             var run = report.RunFolder = RunFolder.Create(request.Config.Data, repo.Name, pr.Number, commits.Head);
             Worktree? worktree = null;
             try
@@ -161,7 +191,7 @@ public static class ReviewRun
                     return report;
                 }
 
-                await ReviewAsync(request, report, run, mirror, commits, promptFile, tokens, cancellationToken).ConfigureAwait(false);
+                await ReviewAsync(request, report, run, mirror, commits, promptFile, tokens, attempts, cancellationToken).ConfigureAwait(false);
                 return report;
             }
             finally
@@ -209,7 +239,7 @@ public static class ReviewRun
 
     private static async Task ReviewAsync(
         RunRequest request, RunReport report, RunFolder run, Mirror mirror, ReviewCommits commits, string promptFile,
-        IReadOnlyList<string> tokens, CancellationToken cancellationToken)
+        IReadOnlyList<string> tokens, int attempts, CancellationToken cancellationToken)
     {
         var (repo, agent) = (request.Repo, request.Agent);
         var diff = report.Diff!;
@@ -238,12 +268,21 @@ public static class ReviewRun
             }
         }
 
+        async Task Record(AttemptReport attempt)
+        {
+            report.Attempts.Add(attempt);
+            if (request.Hooks is { } hooks)
+            {
+                await hooks.AttemptFinishedAsync(attempt.Kind, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         IReadOnlyList<string>? rejection = null;
-        for (var attempt = 1; attempt <= repo.Settings.MaxAttempts; attempt++)
+        for (var attempt = 1; attempt <= attempts; attempt++)
         {
             var prompt = PromptRenderer.Render(promptFile, run, diff, rejection);
             File.WriteAllText(run.PromptPath, prompt);
-            request.Log.WriteLine($"Attempt {attempt} of {repo.Settings.MaxAttempts}: running {agent.Name}...");
+            request.Log.WriteLine($"Attempt {attempt} of {attempts}: running {agent.Name}...");
 
             var outcome = await AgentRunner.RunAsync(agent, paths, prompt, environment, repo.Settings.Timeout,
                 request.Clock.GetUtcNow(), request.Zone, cancellationToken).ConfigureAwait(false);
@@ -251,11 +290,11 @@ public static class ReviewRun
 
             if (outcome.Kind != OutcomeKind.Ok)
             {
-                report.Attempts.Add(new AttemptReport(attempt, outcome.Kind, outcome.Message, [], raw));
+                await Record(new AttemptReport(attempt, outcome.Kind, outcome.Message, [], raw)).ConfigureAwait(false);
                 report.Outcome = outcome.Kind;
                 report.Message = outcome.Message;
                 report.Limit = outcome.Limit;
-                if (outcome.Kind == OutcomeKind.Transient && attempt < repo.Settings.MaxAttempts)
+                if (outcome.Kind == OutcomeKind.Transient && attempt < attempts)
                 {
                     await request.Delay(TimeSpan.FromSeconds(10 * attempt)).ConfigureAwait(false);
                     continue;
@@ -285,7 +324,7 @@ public static class ReviewRun
 
             if (errors.Count > 0)
             {
-                report.Attempts.Add(new AttemptReport(attempt, OutcomeKind.Invalid, "the findings document was rejected", errors, raw));
+                await Record(new AttemptReport(attempt, OutcomeKind.Invalid, "the findings document was rejected", errors, raw)).ConfigureAwait(false);
                 report.Outcome = OutcomeKind.Invalid;
                 report.Message = "the findings document was rejected on every attempt";
                 rejection = errors;
@@ -293,7 +332,7 @@ public static class ReviewRun
             }
 
             var plan = report.Plan = ReviewBuilder.Build(document!, validation!, context, scanner);
-            report.Attempts.Add(new AttemptReport(attempt, OutcomeKind.Ok, null, [], raw));
+            await Record(new AttemptReport(attempt, OutcomeKind.Ok, null, [], raw)).ConfigureAwait(false);
             if (plan.Blocked)
             {
                 // Not retried: a retry would likely do the same (spec "Validator").

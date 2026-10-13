@@ -11,7 +11,8 @@ namespace Rtfd.Runs;
 /// </summary>
 public static class DryRunPrinter
 {
-    public static void Print(RunReport report, RunRequest request, TextWriter output, bool verbose)
+    /// <param name="posting">A live run: the review is about to post, and the caller reports how that went.</param>
+    public static void Print(RunReport report, RunRequest request, TextWriter output, bool verbose, bool posting = false)
     {
         var pr = report.PullRequest;
         if (pr is not null)
@@ -107,13 +108,18 @@ public static class DryRunPrinter
 
         if (report.Plan is { } plan)
         {
-            PrintPlan(plan, output);
+            PrintPlan(plan, output, posting);
         }
 
         output.WriteLine();
         if (request.InputsOnly && report.Outcome is null)
         {
             output.WriteLine("Inputs only: the agent didn't run.");
+            return;
+        }
+
+        if (posting && report.Outcome == OutcomeKind.Ok && report.Refused is null)
+        {
             return;
         }
 
@@ -128,7 +134,7 @@ public static class DryRunPrinter
         });
     }
 
-    private static void PrintPlan(ReviewPlan plan, TextWriter output)
+    private static void PrintPlan(ReviewPlan plan, TextWriter output, bool posting)
     {
         output.WriteLine();
         foreach (var comment in plan.Inline.Where(c => c.ClaimedLine is not null))
@@ -136,7 +142,7 @@ public static class DryRunPrinter
             output.WriteLine($"Snapped: {comment.Path} {comment.ClaimedLine} -> {comment.Line}");
         }
 
-        output.WriteLine($"Review, as it would post: {ReviewBuilder.EventName(plan.Verdict.Event)}");
+        output.WriteLine($"Review{(posting ? "" : ", as it would post")}: {ReviewBuilder.EventName(plan.Verdict.Event)}");
         output.WriteLine($"  Verdict: {plan.Verdict.Why}");
         output.WriteLine();
         output.WriteLine("--- summary ---");

@@ -38,3 +38,10 @@ Nothing released yet. The design is in `docs/spec.md` and the build order in `do
   exactly as a review would, prints everything Claude reports it loaded, and fails on any tool,
   MCP server, plugin or skill beyond rtfd's own. It stops Claude before any model call.
   `--config-only` skips both.
+- `rtfd run` without `--dry-run` posts the review to the PR, on the reviewed commit, and reads it
+  back to confirm the summary, the event and every inline comment arrived as sent. It posts once
+  per head: after a crash the next run finds the review by the hash of its text instead of posting
+  it twice, or posts what it had recorded if it never landed. State lives in `state.db` in the data
+  folder.
+- Each head gets `max_attempts` agent runs. `rtfd retry <repo> --pr <n>` gives them back, and lifts
+  the block on a head whose review held a secret that wasn't in the diff.

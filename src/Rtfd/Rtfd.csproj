@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <PackageReference Include="YamlDotNet" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,6 +27,7 @@
     <!-- gitleaks' rules, converted by scripts/gitleaks-rules.cs, with gitleaks' MIT notice. -->
     <EmbeddedResource Include="Resources/gitleaks-rules.json" LogicalName="Rtfd.Resources.gitleaks-rules.json" />
     <EmbeddedResource Include="Resources/gitleaks-LICENSE.txt" LogicalName="Rtfd.Resources.gitleaks-LICENSE.txt" />
+    <EmbeddedResource Include="State/schema.sql" LogicalName="Rtfd.State.schema.sql" />
   </ItemGroup>
 
 </Project>

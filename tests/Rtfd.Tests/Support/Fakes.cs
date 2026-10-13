@@ -1,12 +1,42 @@
 using System.Text.Json.Nodes;
+using Rtfd.Config;
 using Rtfd.Git;
 using Rtfd.Providers;
 
 namespace Rtfd.Tests.Support;
 
+/// <summary>The process dying at a chosen point, as a test seam (plan Phase 3).</summary>
+public sealed class SimulatedCrash(string where) : Exception($"simulated crash {where}");
+
+public enum PostFailure
+{
+    None,
+
+    /// <summary>The process dies before the review is sent.</summary>
+    CrashBeforePost,
+
+    /// <summary>The review lands, then the process dies before rtfd records its id.</summary>
+    CrashAfterPost,
+
+    /// <summary>GitHub refuses the review with a 422.</summary>
+    Reject,
+
+    /// <summary>A 502: GitHub may or may not have created the review. Here it did.</summary>
+    BadGatewayButLanded,
+}
+
 /// <summary>A provider that serves one PR from a <see cref="GitFixture"/>, with whatever CI and identity a test sets.</summary>
 public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : IProvider
 {
+    private int _nextId = 1000;
+
+    /// <summary>The reviews on the PR, posted by rtfd or by "someone else", newest last.</summary>
+    public List<PostedReview> Reviews { get; } = [];
+
+    public PostFailure Failure { get; set; }
+
+    public int PostCalls { get; private set; }
+
     public string Identity { get; set; } = "someone-else";
     public CiState Ci { get; set; } = new(CiSummary.None, []);
     public IReadOnlyList<ReviewThread> Threads { get; set; } = [];
@@ -30,6 +60,44 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         Task.FromResult(Threads);
 
     public FetchSource FetchSource(PullRequest pr) => new(origin.Origin, $"refs/heads/{pr.HeadRef}", null);
+
+    public Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default)
+    {
+        PostCalls++;
+        var failure = Failure;
+        Failure = PostFailure.None;
+        switch (failure)
+        {
+            case PostFailure.CrashBeforePost:
+                throw new SimulatedCrash("before the post");
+            case PostFailure.Reject:
+                throw new ProviderException("GitHub answered 422: Unprocessable Entity; pull_request_review_thread line must be part of the diff", 422);
+        }
+
+        var state = post.Event switch
+        {
+            Verdict.Approve => "APPROVED",
+            Verdict.RequestChanges => "CHANGES_REQUESTED",
+            _ => "COMMENTED",
+        };
+        var id = (_nextId++).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var review = new PostedReview(id, Identity, state, post.Body, post.CommitId, DateTimeOffset.UtcNow, $"https://github.com/owner/repo/pull/{post.Number}#pullrequestreview-{id}",
+            [.. post.Comments.Select(c => new PostedComment((_nextId++).ToString(System.Globalization.CultureInfo.InvariantCulture), c.Path, c.Line, c.Body))]);
+        Reviews.Add(review);
+
+        return failure switch
+        {
+            PostFailure.CrashAfterPost => throw new SimulatedCrash("after the post"),
+            PostFailure.BadGatewayButLanded => throw new ProviderException("GitHub answered 502", 502) { MayHaveLanded = true },
+            _ => Task.FromResult(review with { Comments = [] }),
+        };
+    }
+
+    public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Reviews.FirstOrDefault(r => r.Id == reviewId));
+
+    public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PostedReview>>([.. Reviews.Select(r => r with { Comments = [] })]);
 
     public static PullRequest Pr(string head, string headRef = "feature", string author = "owner", int number = 7) => new()
     {

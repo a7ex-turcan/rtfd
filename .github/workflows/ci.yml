@@ -86,6 +86,16 @@ jobs:
           # The runner exits with the last native exit code, which is the refusal above.
           exit 0
 
+      - name: The published binary opens the state store
+        shell: pwsh
+        run: |
+          # SQLite is a native library next to the binary; a trimmed or missing one shows here.
+          $env:RTFD_HOME = Join-Path $env:RUNNER_TEMP rtfd-state
+          New-Item -ItemType Directory -Force $env:RTFD_HOME | Out-Null
+          $out = ./publish/rtfd.exe retry sandbox --pr 1 --config examples/rtfd.yaml | Out-String
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'nothing to clear') { throw "the state store didn't open:`n$out" }
+          if (-not (Test-Path (Join-Path $env:RTFD_HOME state.db))) { throw "no state.db was created" }
+
       - name: rtfd-git refuses hostile arguments in the published binary
         shell: pwsh
         run: |

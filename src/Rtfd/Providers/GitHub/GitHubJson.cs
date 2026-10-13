@@ -24,7 +24,17 @@ internal sealed record GhStatus(string Context, string State, string? Descriptio
 
 internal sealed record GhCombinedStatus(string State, int TotalCount, List<GhStatus> Statuses);
 
-internal sealed record GhError(string? Message);
+internal sealed record GhError(string? Message, List<GhErrorDetail>? Errors);
+
+internal sealed record GhErrorDetail(string? Message, string? Field, string? Code, string? Resource);
+
+internal sealed record GhReviewCommentRequest(string Path, int Line, string Side, string Body);
+
+internal sealed record GhReviewRequest(string CommitId, string Body, string Event, List<GhReviewCommentRequest> Comments);
+
+internal sealed record GhReview(long Id, GhUser? User, string? Body, string State, string? CommitId, DateTimeOffset? SubmittedAt, string? HtmlUrl);
+
+internal sealed record GhReviewComment(long Id, string Path, int? Line, string Body);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(GhUser))]
@@ -34,6 +44,10 @@ internal sealed record GhError(string? Message);
 [JsonSerializable(typeof(GhCheckRuns))]
 [JsonSerializable(typeof(GhCombinedStatus))]
 [JsonSerializable(typeof(GhError))]
+[JsonSerializable(typeof(GhReviewRequest))]
+[JsonSerializable(typeof(GhReview))]
+[JsonSerializable(typeof(List<GhReview>))]
+[JsonSerializable(typeof(List<GhReviewComment>))]
 internal sealed partial class GitHubJson : JsonSerializerContext;
 
 // GraphQL: review threads and their resolution exist only there.

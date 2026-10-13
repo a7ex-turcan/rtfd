@@ -30,7 +30,6 @@ public class EntryPointTests
     }
 
     [Theory]
-    [InlineData("retry", "Phase 3")]
     [InlineData("serve", "Phase 5")]
     [InlineData("status", "Phase 5")]
     [InlineData("install-service", "Phase 6")]
@@ -51,7 +50,7 @@ public class EntryPointTests
         // The spec's CLI table.
         string[] commands = ["serve", "install-service", "status", "run", "retry", "pause", "resume", "validate", "git-tools"];
 
-        string[] built = ["validate", "run", "git-tools"];
+        string[] built = ["validate", "run", "git-tools", "retry"];
 
         Assert.All(commands, command => Assert.True(built.Contains(command) || EntryPoint.NotYetBuilt.ContainsKey(command), command));
     }

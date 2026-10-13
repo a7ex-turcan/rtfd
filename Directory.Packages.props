@@ -8,6 +8,9 @@
   <ItemGroup Label="Product">
     <!-- The node model only, mapped by hand: reflection deserialization doesn't survive AOT. -->
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+
+    <!-- The state store. Same version as rtfc, which ships it in a Native AOT binary. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup Label="Tests">

@@ -383,6 +383,11 @@ stops Claude at its init event, so it costs no model call (spec decision 48).
 **Goal:** `rtfd run <repo> --pr N` posts one review, exactly once, even across a crash, and confirms
 that it landed.
 
+**Status (2026-10-13): built.** The local tests cover the crash points, attempts, `retry`, the 422
+path and the self-review downgrade; `GitHubLiveTests` checked the round trip on the sandbox. The
+first real post went to `a7ex-turcan/rtfd-sandbox#1`. Nothing posts to nutrx until the owner says
+so (the last exit criterion).
+
 ### Scope
 
 1. **The state store: SQLite.** The spec leaves "SQLite, or a JSON file per repo" open; transactions

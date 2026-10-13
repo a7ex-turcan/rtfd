@@ -21,7 +21,6 @@ public static class EntryPoint
     /// <summary>Commands from the spec's CLI table that aren't built yet, and the plan phase that brings each.</summary>
     internal static readonly IReadOnlyDictionary<string, string> NotYetBuilt = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["retry"] = "Phase 3",
         ["serve"] = "Phase 5",
         ["status"] = "Phase 5",
         ["pause"] = "Phase 5",
@@ -58,6 +57,8 @@ public static class EntryPoint
                     return ValidateCommand.Run(ctx, rest);
                 case "run":
                     return RunCommand.Run(ctx, rest);
+                case "retry":
+                    return RetryCommand.Run(ctx, rest);
                 case "git-tools":
                     return GitToolsCommand.Run(ctx, rest, stdin ?? Console.In);
                 case var command when NotYetBuilt.TryGetValue(command, out var phase):
@@ -82,9 +83,9 @@ public static class EntryPoint
 
           validate [--config <path>]       check the config, the tokens and repos, and what each agent
               [--config-only]              loads; --config-only stops after the config
-          run <repo> --pr <n> --dry-run    one review now, printed instead of posted
-              [--inputs-only] [--keep] [--verbose] [--config <path>]
-          retry <repo> --pr <n>            give a PR its attempts back (Phase 3)
+          run <repo> --pr <n>              one review now, posted and read back
+              [--dry-run] [--inputs-only] [--keep] [--verbose] [--config <path>]
+          retry <repo> --pr <n>            give a PR its attempts back, or lift a secret block
           serve                            watch every configured repo (Phase 5)
           status                           is it watching, and what has it done (Phase 5)
           pause <repo> | resume <repo>     stop or restart watching one repo (Phase 5)

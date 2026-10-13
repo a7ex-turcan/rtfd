@@ -1,3 +1,4 @@
+using Rtfd.Config;
 using Rtfd.Git;
 
 namespace Rtfd.Providers;
@@ -64,6 +65,22 @@ public sealed record ReviewThread
 
 public sealed record RepositoryInfo(bool IsPublic, string DefaultBranch);
 
+/// <summary>An inline comment to post, on a line inside a hunk (the validator made sure).</summary>
+public sealed record ReviewPostComment(string Path, int Line, DiffSide Side, string Body);
+
+/// <summary>One review to post: the summary, the event and the inline comments, all on one commit.</summary>
+/// <param name="CommitId">The reviewed head, so a push during the run doesn't misplace the comments.</param>
+public sealed record ReviewPost(int Number, string CommitId, Verdict Event, string Body, IReadOnlyList<ReviewPostComment> Comments);
+
+public sealed record PostedComment(string Id, string Path, int? Line, string Body);
+
+/// <summary>A review as the provider has it.</summary>
+/// <param name="State">GitHub's: COMMENTED, APPROVED, CHANGES_REQUESTED, PENDING, DISMISSED.</param>
+/// <param name="Comments">Its inline comments, when they were asked for.</param>
+public sealed record PostedReview(
+    string Id, string Author, string State, string Body, string? CommitId, DateTimeOffset? SubmittedAt, string? Url,
+    IReadOnlyList<PostedComment> Comments);
+
 /// <summary>A refusal or failure from the provider, with a message a person can act on.</summary>
 public sealed class ProviderException(string message, int? status = null) : Exception(message)
 {
@@ -71,6 +88,9 @@ public sealed class ProviderException(string message, int? status = null) : Exce
 
     /// <summary>401 and 403 that aren't rate limits: retrying won't help (spec outcome <c>fatal</c>).</summary>
     public bool IsAuth => Status is 401 or 403;
+
+    /// <summary>A post that failed in a way that doesn't say whether it landed: a 5xx, a timeout, a dropped connection.</summary>
+    public bool MayHaveLanded { get; init; }
 }
 
 /// <summary>The read side of a provider adapter (spec "Provider adapter"). Posting arrives in Phase 3.</summary>
@@ -91,4 +111,16 @@ public interface IProvider
 
     /// <summary>Where git fetches the PR from, with the credential for the fetch.</summary>
     FetchSource FetchSource(PullRequest pullRequest);
+
+    /// <summary>
+    /// Posts one review. Not retried on a 5xx or a network error: the review may have landed,
+    /// and only the write-ahead record's body hashes can tell (spec "Posting and idempotency").
+    /// </summary>
+    Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default);
+
+    /// <summary>One review with its inline comments, or null when it doesn't exist.</summary>
+    Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default);
+
+    /// <summary>Every review on the PR, without their comments: for matching a write-ahead record after a crash.</summary>
+    Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default);
 }

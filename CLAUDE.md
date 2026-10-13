@@ -44,8 +44,16 @@ the provider (`Config/ProviderChecks.cs`) and launches each claude agent exactly
 would, reading the init event of `--output-format stream-json` and stopping Claude before it calls
 a model (`Agents/AgentProbe.cs`). On this machine it reports Read, Grep, Glob and rtfd-git's four
 tools, nothing else, with the real user setup (rtfc, plugins, user MCP servers) installed.
-`--config-only` skips the provider and the agent; CI uses it. Next is Phase 3, posting. Update
-this section when a phase lands.
+`--config-only` skips the provider and the agent; CI uses it.
+
+**Phase 3 is built** (2026-10-13): `rtfd run` without `--dry-run` posts. The state store
+(`State/StateStore.cs`, `State/schema.sql`: runs, attempts per commit, postings and every body with
+its hash) holds the write-ahead record; `Posting/Poster.cs` posts one review on the reviewed head,
+reads it back and checks every body by hash, and settles what a crash left open before anything
+new posts (found by hash: nothing posts; not found: the recorded bodies post, without the agent).
+`Posting/StoreHooks.cs` gives each head one review and its attempts; `rtfd retry` clears attempts
+and secret blocks. A dry run touches no state. Next is Phase 4, follow-ups. Update this section
+when a phase lands.
 
 ## Hard rules
 
@@ -140,7 +148,8 @@ Same stack and conventions as the siblings; rtfc's `AGENTS.md` is the fullest st
   CLI are opt-in: `RTFD_LIVE_CLAUDE=1` for the isolation tests, which use a scratch
   `CLAUDE_CONFIG_DIR` and stop Claude before it calls a model.
 - The provider has recorded-response tests; live tests against the sandbox repo need
-  `RTFD_LIVE_GITHUB=1`.
+  `RTFD_LIVE_GITHUB=1`. Crash points are a seam in `FakeProvider` (`PostFailure`), so recovery is
+  tested by a run that dies and the next one.
 - CI runs on Windows and Linux. Windows is the primary target.
 - Name tests as sentences: `Git_tools_refuse_an_output_argument`.
 
@@ -204,12 +213,17 @@ Unverified, needed by v0:
 - Whether a user-level `~/.claude/CLAUDE.md` loads under the flags: it only shows in the model's
   context, and checking needs a model call under the user's own login. This machine has none, and
   `validate` warns when one exists (`agent.user_memory_present`).
-- GitHub: `resolveReviewThread`; one inline comment outside a hunk fails the whole review with a
-  422 (Phase 3). Review threads come from GraphQL `reviewThreads` (checked, with recordings).
+- GitHub: `resolveReviewThread` (Phase 4). Review threads come from GraphQL `reviewThreads`
+  (checked, with recordings).
 
 Checked:
 
 - 2026-10-13: the NuGet id `rtfd` is free; `a7ex-turcan/rtfd` holds this repo.
+- 2026-10-13, GitHub REST, on the sandbox (`GitHubLiveTests`, `RTFD_LIVE_GITHUB=1`): a review posted
+  with `POST /pulls/{n}/reviews` reads back with the same body and comment hashes (line endings and
+  trailing whitespace normalized), as `COMMENTED` on the given `commit_id`, and shows in the review
+  list. One inline comment outside the diff fails the whole review with a 422 whose `errors` say
+  why. The marker `<!-- rtfd ... -->` doesn't render.
 
 ## Open decisions
 
@@ -232,6 +246,9 @@ dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o /some/dir   
 
 # One review, printed instead of posted, from a throwaway home (never the real ~/.rtfd):
 RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/Rtfd -- run nutrx --pr 37 --dry-run --verbose
+
+# Posting against GitHub itself, on the sandbox repo only:
+RTFD_LIVE_GITHUB=1 GH_TOKEN="$(gh auth token)" tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.GitHubLiveTests
 
 # The isolation tests against the installed Claude Code, with a scratch user setup (no model call):
 RTFD_LIVE_CLAUDE=1 tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.LiveClaudeIsolationTests

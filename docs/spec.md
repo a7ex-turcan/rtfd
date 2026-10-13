@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate` (config, tokens, agents) and `rtfd run --dry-run` exist; nothing posts yet.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe) and `rtfd retry` exist; follow-ups and `serve` are next.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -304,7 +304,7 @@ It sorts each run's outcome:
 
 Per agent account: the paused-until time.
 
-SQLite, or a JSON file per repo.
+SQLite (decision 49).
 
 **Policy.** Per repo:
 - the trust tier;
@@ -539,6 +539,13 @@ From building Phase 2:
 
 47. **No dedicated OS account for v0** (open question 3). The flags keep everything `rtfd validate` can see out of the agent, and validate proves it on every run: no user plugins, MCP servers, connectors, skills, commands, settings or hooks, and project memory is off. The one thing it can't see is a user-level `~/.claude/CLAUDE.md`, which only shows in the model's context. The owner has none, and validate warns when one exists. A separate account becomes the fix if one is needed, or if a CLI update starts loading something the flags can't stop.
 48. **`validate` stops the agent at its init event.** It launches the agent exactly as a review does, reads what the CLI reports it loaded, and kills it before any model call. So the check costs nothing, needs no login, and runs on every `validate`. Not being able to read the event is an error: it fails closed.
+
+From building Phase 3:
+
+49. **The state store is SQLite**, `state.db` in the data directory: a transaction is what makes the write-ahead record honest, since the posting and the hash of every body are recorded together or not at all.
+50. **A post is never retried blindly.** After a 5xx, a timeout or a dropped connection the review may have landed, so the write-ahead record stays open and is matched by body hash, at once and again at the next run. Only a rate limit, which GitHub answers before doing anything, is retried.
+51. **A review that never landed is posted from its record.** The write-ahead record keeps every body in full, so after a crash before the post the next run posts what was recorded, on the same head, without running the agent again. If the PR has moved on, the old review is dropped and the new head gets its own.
+52. **One review per head, and a dry run touches no state.** A head with a review that landed is refused until it changes; `--dry-run` reads, runs the agent and prints, but records nothing and counts no attempt.
 
 ## Open questions
 

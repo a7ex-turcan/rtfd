@@ -4,6 +4,27 @@ Where the code goes further than [`spec.md`](spec.md) says, or settles something
 open, and why. The spec is updated in the same change (its "Decisions taken" log, from 42 on);
 this file keeps the reasoning that doesn't belong in the design. Newest first.
 
+## Phase 3 (2026-10-13)
+
+### Body hashes ignore line endings and trailing whitespace
+
+`Poster.Hash` takes the SHA-256 of the body with CRLF turned into LF and the end trimmed. On the
+sandbox GitHub gave bodies back unchanged, but a provider (or a proxy) that normalized either would
+otherwise make crash recovery miss a review that landed, and post it twice. Nothing a reader sees
+depends on those characters.
+
+### Every agent attempt counts, a good one too
+
+The spec counts invalid attempts and not usage limits; it says nothing of the rest. rtfd counts
+every attempt but a limit: a timeout or an unexplained failure would otherwise retry forever, and a
+good attempt ends in a review, after which the head is refused anyway.
+
+### The marker carries the run, and the run is recorded first
+
+`<!-- rtfd sha=<head> run=<id> -->` names the run row the store creates when the head passes the
+gate, before the agent starts. The marker is part of the summary's hash, so a re-post from the
+record is byte-identical to the first attempt and can't be mistaken for a different review.
+
 ## Phase 1 (2026-10-13)
 
 ### The diff is scanned for credentials too (spec decision 45)

@@ -98,9 +98,11 @@ line numbers. Nothing touches the network, git or an agent yet.
 2. **Projects.** `src/Rtfd` (console, AOT-compatible) and `tests/Rtfd.Tests`.
 3. **CLI dispatcher.** `--help`, `--version`, and every command from the spec's CLI table as a stub
    that says which phase brings it and exits non-zero. stdout for results, stderr for logs and errors.
-4. **The data directory.** `RtfdHome` resolves the root from `data_dir` in the config, overridden by
-   the `RTFD_HOME` environment variable. Every path rtfd touches (mirrors, runs, `state.db`, logs,
-   `status.json`) derives from it.
+4. **The home and the data directory** (spec decision 40). `RtfdHome` resolves the home: `RTFD_HOME`,
+   else `~/.rtfd`. It holds `rtfd.yaml` and the prompts. `data_dir` in the config moves everything
+   rtfd writes (mirrors, runs, `state.db`, logs, `status.json`) elsewhere, and defaults to the home.
+   `--config <path>` points one command at another config. Every path rtfd touches derives from
+   these two.
 5. **Config loader**, mapped by hand from YamlDotNet's node model as rtfq's `ConfigLoader` does: an
    unknown key is an error with its line number, durations parse (`5m`, `30m`), `defaults` merge into
    each repo, agent names resolve, prompt paths resolve relative to the config file.
@@ -125,13 +127,12 @@ The provider, git, agents, posting, state.
 - ✅ CI is green on a clean clone on both OSes, AOT publish included.
 - ✅ `rtfd validate` accepts `examples/rtfd.yaml`, fails a misspelt key with its line number, and
   fails `hooks:` on a repo with `config.hooks_unsupported`.
-- ✅ No test touches the real data directory: every test runs against a temp home.
+- ✅ With no `~/.rtfd/rtfd.yaml`, `rtfd validate` says where it looked and points at
+  `examples/rtfd.yaml`.
+- ✅ No test touches the real home or data directory: every test sets `RTFD_HOME` to a temp folder.
 
 ### Risks and decisions
 
-- ❓ **Where the config file lives**, given that `data_dir` is inside it. Proposal: `--config`, else
-  `RTFD_CONFIG`, else `rtfd.yaml` in the user's config folder (`%APPDATA%\rtfd\` or
-  `~/.config/rtfd/`). `RTFD_HOME` overrides `data_dir`, which is what tests use.
 - ⚠ YamlDotNet under AOT: low risk, rtfq already ships the node model this way.
 
 ---
@@ -522,7 +523,8 @@ no window anyone can close, and the two personal-machine PowerShell watchers are
 1. **Windows: a scheduled task at logon, as the user**, because the agent CLI's login lives in the
    user's profile. Generated task XML, registered with `schtasks /create /xml`: no stop on battery,
    start on battery allowed, no execution time limit, restart on failure, ignore a new instance while
-   one runs, start when available.
+   one runs, start when available. The task runs `rtfd serve --config <absolute path>`, so it never
+   depends on an environment variable (spec decision 40).
 2. **A headless console.** The task must not create a console window that Windows Terminal adopts.
    Candidates: launch through `conhost.exe --headless`, a small WinExe launcher, or `serve`
    relaunching itself with no window. Pick the one that survives Windows Terminal being the default
@@ -628,4 +630,5 @@ To fold into the spec when the phase that meets them lands:
 4. **The scrubbed environment is an allowlist**, not a list of things removed (Phase 1b).
 5. **Hand resolves on GitHub** can't be recognised by `resolvedBy`, because rtfd posts as the owner;
    rtfd's record of what it resolved decides (Phase 4).
-6. **Where the config file lives**, given that `data_dir` is inside it (Phase 0).
+6. ~~**Where the config file lives**, given that `data_dir` is inside it.~~ Settled as spec decision
+   40 (2026-10-13).

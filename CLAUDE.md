@@ -68,8 +68,10 @@ check included. No code path posts text that skipped it.
 
 ### 5. Leave the real data directory and the user's agent setup alone
 
-Every path rtfd touches derives from its data directory, which `RTFD_HOME` overrides. Tests use a
-temp home. Don't read, write or delete the real data directory, and don't start `serve` against it.
+Every path rtfd touches derives from its home (`RTFD_HOME`, default `~/.rtfd`, holding `rtfd.yaml`
+and the prompts) or the `data_dir` its config names (spec decision 40). Tests set `RTFD_HOME` to a
+temp folder. Don't read, write or delete the real home or data directory, and don't start `serve`
+against them.
 Never edit `~/.claude` settings, plugins or MCP config, or Copilot's, to make an isolation test pass:
 use a scratch configuration directory.
 
@@ -157,8 +159,8 @@ Don't settle these silently in code. Raise them.
 
 - The spec's open questions (the name, isolation flags, a dedicated OS account, Bitbucket without a
   marker).
-- Every ❓ in `docs/plan.md`, such as where the config file lives, where the worktree sits, rebases in
-  v0, and keeping reviewed heads as local refs.
+- Every ❓ in `docs/plan.md`, such as where the worktree sits, rebases in v0, and keeping reviewed
+  heads as local refs.
 
 ## Commands
 

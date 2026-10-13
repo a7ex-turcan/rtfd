@@ -327,7 +327,7 @@ rtfd refuses to start a repo whose config contradicts itself:
 
 ```yaml
 defaults:
-  data_dir: D:\rtfd                   # mirrors, worktrees, run folders, state
+  data_dir: D:\rtfd                   # mirrors, worktrees, run folders, state; defaults to the home (decision 40)
   interval: 5m
   quiet_period: 3m
   ci_max_wait: 30m
@@ -521,6 +521,10 @@ From the fourth review:
 37. **Hand-resolved Shoulds are reported once, in the summary only.** No reply on the thread.
 38. **Copilot confinement:** working directory plus `--add-dir` for paths; `--deny-tool` takes precedence over `--allow-tool`; `.github/copilot/settings.json` and `.github/copilot/settings.local.json` are executable configuration and get reset.
 39. **v0 is built dry-run first:** `rtfd run --dry-run` end to end against real PRs before posting, state or `serve`.
+
+From planning:
+
+40. **Where the config lives.** One home folder, `RTFD_HOME`, default `~/.rtfd`, holding `rtfd.yaml` and the prompts, the same pattern as rtfm's and rtfc's homes. `data_dir` moves everything rtfd writes (mirrors, worktrees, run folders, state, logs) elsewhere, and defaults to the home. `--config <path>` points one command at another file, and relative paths in a config resolve against its folder. `install-service` writes the absolute config path into the service's command line, so the service never depends on an environment variable (rtfc found that a login item can't carry `RTFC_HOME`).
 
 ## Open questions
 

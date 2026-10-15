@@ -62,4 +62,10 @@ public sealed class DataDirectory(string root)
     public string StatePath => Path.Combine(Root, "state.db");
     public string LogsDirectory => Path.Combine(Root, "logs");
     public string StatusPath => Path.Combine(Root, "status.json");
+
+    /// <summary>Held by the one <c>serve</c> of this data directory for as long as it runs.</summary>
+    public string ServeLockPath => Path.Combine(Root, "serve.lock");
+
+    /// <summary>Held by whoever works on a repo's mirror and PRs: <c>serve</c>'s tick or an <c>rtfd run</c>.</summary>
+    public string RepoLockPath(string repo) => Path.Combine(Root, "locks", repo + ".lock");
 }

@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '3');
 
 -- Per PR: the head the last review was of, and its merge base then, for the interdiff (Phase 4).
 CREATE TABLE IF NOT EXISTS prs (
@@ -104,4 +104,20 @@ CREATE TABLE IF NOT EXISTS threads (
   resolved_by_rtfd      TEXT,           -- when rtfd resolved it
   hand_resolve_reported TEXT,           -- when a summary saying it was closed by hand landed
   PRIMARY KEY (repo, pr, comment_id)
+);
+
+-- Per repo (Phase 5): `rtfd pause`, and a stop after a fatal outcome that `rtfd resume` lifts.
+-- serve reads both on every tick.
+CREATE TABLE IF NOT EXISTS repos (
+  repo           TEXT PRIMARY KEY,
+  paused_at      TEXT,                  -- `rtfd pause`
+  stopped_at     TEXT,                  -- a fatal outcome, such as the agent not being logged in
+  stopped_reason TEXT
+);
+
+-- Per agent account (spec "State store"): a usage limit pauses every repo whose agent uses it.
+CREATE TABLE IF NOT EXISTS accounts (
+  account      TEXT PRIMARY KEY,
+  paused_until TEXT,
+  message      TEXT                     -- the limit message, for the log and `rtfd status`
 );

@@ -3,14 +3,16 @@ using Rtfd.Config;
 using Rtfd.Posting;
 using Rtfd.Providers;
 using Rtfd.Providers.GitHub;
-using Rtfd.Review;
 using Rtfd.Runs;
+using Rtfd.Serve;
 using Rtfd.State;
 
 namespace Rtfd.Cli;
 
 /// <summary>What <c>run</c> talks to beyond the config; tests pass fakes.</summary>
-internal sealed record RunServices(Func<RepoConfig, ProviderToken, IProvider> Providers, string RtfdExecutable, TimeProvider Clock, Func<TimeSpan, Task>? Delay = null)
+/// <param name="LockWait">How long to wait for the repo's lock; 15 seconds, enough for a poll of serve's to let go.</param>
+internal sealed record RunServices(
+    Func<RepoConfig, ProviderToken, IProvider> Providers, string RtfdExecutable, TimeProvider Clock, Func<TimeSpan, Task>? Delay = null, TimeSpan? LockWait = null)
 {
     public static RunServices Real => new((repo, token) => new GitHubProvider(repo.Slug, token), Environment.ProcessPath ?? "rtfd", TimeProvider.System);
 }
@@ -66,6 +68,14 @@ internal static class RunCommand
             return EntryPoint.Failure;
         }
 
+        // serve and other runs work on the same mirror and PRs: one at a time per repo (plan Phase 5).
+        using var repoLock = FileLock.AcquireAsync(config.Data.RepoLockPath(repo.Name), services.LockWait ?? TimeSpan.FromSeconds(15)).GetAwaiter().GetResult();
+        if (repoLock is null)
+        {
+            ctx.Stderr.WriteLine($"rtfd run: another rtfd is working on {repo.Name} right now: serve reviewing one of its PRs, or another `rtfd run`. `rtfd status` shows which; try again once it's done.");
+            return EntryPoint.Failure;
+        }
+
         var request = new RunRequest
         {
             Config = config,
@@ -111,47 +121,20 @@ internal static class RunCommand
         var provider = services.Providers(repo, new ProviderToken(token));
         try
         {
-            var poster = new Poster(store, provider, repo, services.Clock, ctx.Stderr);
-
-            // What an earlier run left open settles first, so a crash never ends in a second review.
-            var pr = await provider.GetPullRequestAsync(request.Number).ConfigureAwait(false);
-            if (await poster.RecoverAsync(pr.Number, pr.HeadSha).ConfigureAwait(false) is { } recovered)
+            var outcome = await LiveRun.RunAsync(request, store, provider, report => DryRunPrinter.Print(report, request, output, verbose, posting: true)).ConfigureAwait(false);
+            if (outcome.Recovered is { } recovered)
             {
-                output.WriteLine($"PR #{pr.Number}  {pr.Title}");
+                output.WriteLine($"PR #{outcome.PullRequest.Number}  {outcome.PullRequest.Title}");
                 output.WriteLine();
-                return PrintPosting(output, recovered, ReviewEventOf(store, repo, pr));
+                return PrintPosting(output, recovered, outcome.Event!);
             }
 
-            var hooks = new StoreHooks(store, repo, services.Clock);
-            var history = new ReviewHistory(store, persist: true, services.Clock, ctx.Stderr);
-            var report = await ReviewRun.RunAsync(request with { Hooks = hooks, History = history }).ConfigureAwait(false);
-            DryRunPrinter.Print(report, request, output, verbose, posting: true);
-            if (report.Unchanged is not null && report.Commits is { } same)
+            if (outcome.Posted is { } posted)
             {
-                // Nothing of the author's changed: this head counts as reviewed, and the next follow-up starts here.
-                store.SetLastReviewed(repo.Name, pr.Number, same.Head, same.MergeBase);
-                hooks.Finish(report, "unchanged", report.Unchanged);
-                return EntryPoint.Ok;
+                return PrintPosting(output, posted, outcome.Event!);
             }
 
-            if (report.Refused is not null || report.Outcome != OutcomeKind.Ok || report.Plan is not { } plan || hooks.RunId is not { } runId)
-            {
-                hooks.Finish(report);
-                return EntryPoint.Failure;
-            }
-
-            var posted = await poster.PostAsync(runId, report.PullRequest!, report.Commits!.Head, report.Commits.MergeBase, report.PostingIdentity!, plan).ConfigureAwait(false);
-            if (posted.Status == PostStatus.Rejected)
-            {
-                // GitHub refusing a review means the validator let something through: count it invalid.
-                hooks.Finish(report, "invalid", posted.Message);
-            }
-            else
-            {
-                hooks.Finish(report);
-            }
-
-            return PrintPosting(output, posted, ReviewBuilder.EventName(plan.Verdict.Event));
+            return outcome.Report?.Unchanged is not null ? EntryPoint.Ok : EntryPoint.Failure;
         }
         catch (ProviderException ex)
         {
@@ -163,9 +146,6 @@ internal static class RunCommand
             (provider as IDisposable)?.Dispose();
         }
     }
-
-    private static string ReviewEventOf(StateStore store, RepoConfig repo, PullRequest pr) =>
-        store.LandedPosting(repo.Name, pr.Number, pr.HeadSha)?.Event ?? "review";
 
     private static int PrintPosting(TextWriter output, PostOutcome outcome, string verdictEvent)
     {

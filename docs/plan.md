@@ -39,7 +39,7 @@ Four rules govern the sequence:
 | **2** | `validate` | It proves, on the installed Claude, that nothing from the user's setup loads | v0 step 2 |
 | **3** | Posting | A review lands exactly once, even across a crash, and is confirmed | v0 step 3 |
 | **4** | Follow-ups | A fixed thread gets "Looks good now." and is resolved; only the interdiff is reviewed | v0 step 4 |
-| **5** | `serve` | 48 h unattended on nutrx: every new head reviewed once, none twice | v0 step 5 |
+| **5** | `serve` | 48 h unattended (the sandbox; nutrx at Phase 6's switchover): every new head reviewed once, none twice | v0 step 5 |
 | **6** | `install-service` | Survives reboot, battery and 72 h with no window; personal scripts retired. **v0 done** | v0 step 6 |
 | **7** | v1: Bitbucket + Copilot | The work watchers that need no browser check are retired | v1 |
 | | Later | One item at a time, each when something real needs it | Later |
@@ -504,6 +504,11 @@ merge in the mirror rather than a scratch worktree (spec decision 54), reviewed 
 **Goal:** one process watches every configured repo, reviews each new head once at the right time,
 and can say whether it is alive.
 
+**Status (2026-10-15): built.** Every exit criterion but the 48 h run passed, locally in `ServeTests`
+and `ChangeDetectorTests` and live on `a7ex-turcan/rtfd-sandbox` with the real Claude Code. CI only
+decides when a head is reviewed (spec decision 60), config edits need a restart (61), and the 48 h
+run is on the sandbox now, with nutrx's half at Phase 6's switchover (all three the owner's calls).
+
 ### Scope
 
 1. **One instance per data directory**, by a lock file, as rtfc's daemon does. A second `serve` exits
@@ -513,7 +518,8 @@ and can say whether it is alive.
 3. **The change detector**, fed by polling as a stream of events (new PR, new head, CI change): the
    quiet period resets only on a new head; CI must settle or `ci_max_wait` pass (and the summary says
    CI hadn't finished); a repo with no checks doesn't wait. The author allowlist, forks and drafts
-   filter here, and the re-review policy (any push, or CI change only) applies. Polls use conditional
+   filter here. ~~The re-review policy (any push, or CI change only) applies.~~ *A CI result on a
+   reviewed head triggers nothing (the owner, 2026-10-15; spec decision 60).* Polls use conditional
    requests (a 304 doesn't count against GitHub's rate limit).
 4. **Outcomes.** `invalid` counts an attempt. `limit` stores `paused_until` on the agent's account,
    pauses every repo whose agent uses it, and gives the attempt back. `transient` backs off. `fatal`
@@ -531,19 +537,28 @@ and can say whether it is alive.
 ### Exit criteria
 
 - ✅ 48 h unattended on nutrx and the sandbox: every new head reviewed exactly once, none twice, a log
-  line for every poll.
-- ✅ Five pushes inside the quiet period produce one review.
+  line for every poll. *(The owner's call, 2026-10-15: the sandbox now, with scripted pushes; nutrx
+  at Phase 6's switchover, since its PowerShell watcher still runs and both would review every PR.
+  Not passed yet: the sandbox run started on 2026-10-15, and its first hour reviewed every new head
+  once, with a poll line every minute.)*
+- ✅ Five pushes inside the quiet period produce one review. *(Sandbox PR #2: five pushes 25 s apart,
+  one review of the last head, 5532101131; and `Five_pushes_inside_the_quiet_period_produce_one_review`.)*
 - ✅ `FakeAgent` printing Claude's limit message with a reset time pauses every repo on that account
   until then, with attempts unchanged and `status` showing the pause; it resumes on its own.
+  *(`A_usage_limit_pauses_every_repo_on_the_account_with_attempts_unchanged_and_resumes_on_its_own`.)*
 - ✅ Killing `serve` mid-review and starting it again leaves no duplicate and no leftover worktree.
-- ✅ `rtfd status` gives the right answer with `serve` running, stopped and hung.
+  *(Live: killed 8 s into Claude's run; the job object took `claude.exe` and `rtfd git-tools` down
+  with it; the restart swept both folders and posted one review, 5532226896.)*
+- ✅ `rtfd status` gives the right answer with `serve` running, stopped and hung. *(Live: running;
+  suspended past two intervals, "not responding"; resumed, running; killed, "didn't stop cleanly";
+  and in `ServeTests`.)*
 
 ### Risks and decisions
 
 - ⚠ Windows file locks: a worktree can't be deleted while a straggling child holds a handle. Retry the
   delete, and sweep at startup.
-- ❓ Config edits other than the prompt need a restart in v0. Reloading the config on change can come
-  later if it's missed.
+- ✔ Config edits other than the prompt need a restart in v0 (the owner, 2026-10-15; spec decision 61).
+  serve logs that the file changed and `status` says so. Reloading can come later if it's missed.
 
 ---
 
@@ -567,7 +582,8 @@ no window anyone can close, and the two personal-machine PowerShell watchers are
 4. **Linux and macOS:** a systemd user unit and a launchd agent, generated with instructions to enable
    them. Not battle-tested in v0, since no current user runs there.
 5. **Switch over** with the owner: stop and remove the two personal-machine watchers, then start
-   rtfd. Not both at once, or PRs get reviewed twice.
+   rtfd. Not both at once, or PRs get reviewed twice. nutrx's half of Phase 5's 48 h run happens
+   here, and it is rtfd's first real post to nutrx.
 6. **Release 0.1.0** as the siblings release: a `vX.Y.Z` tag, Native AOT binaries per platform, a
    GitHub Release.
 

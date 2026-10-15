@@ -30,8 +30,6 @@ public class EntryPointTests
     }
 
     [Theory]
-    [InlineData("serve", "Phase 5")]
-    [InlineData("status", "Phase 5")]
     [InlineData("install-service", "Phase 6")]
     public void Commands_not_built_yet_name_the_phase_that_brings_them(string command, string phase)
     {
@@ -50,7 +48,7 @@ public class EntryPointTests
         // The spec's CLI table.
         string[] commands = ["serve", "install-service", "status", "run", "retry", "pause", "resume", "validate", "git-tools"];
 
-        string[] built = ["validate", "run", "git-tools", "retry"];
+        string[] built = ["validate", "run", "git-tools", "retry", "serve", "status", "pause", "resume"];
 
         Assert.All(commands, command => Assert.True(built.Contains(command) || EntryPoint.NotYetBuilt.ContainsKey(command), command));
     }

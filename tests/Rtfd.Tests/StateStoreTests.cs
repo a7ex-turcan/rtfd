@@ -52,7 +52,7 @@ public sealed class StateStoreTests : IDisposable
 
         using var store = StateStore.Open(DbPath);
 
-        Assert.Equal(2, store.SchemaVersion);
+        Assert.Equal(StateStore.CurrentSchemaVersion, store.SchemaVersion);
         var landed = store.LandedPosting("repo", 7, "abc")!;
         Assert.Null(landed.MergeBase);
         Assert.Empty(landed.Reports);
@@ -74,5 +74,35 @@ public sealed class StateStoreTests : IDisposable
 
         var thread = Assert.Single(store.Threads("repo", 7));
         Assert.Equal(("should", "2026-10-15T08:00:00.000Z", "2026-10-15T09:00:00.000Z"), (thread.Severity, thread.ResolvedByRtfd, thread.HandResolveReported));
+    }
+
+    [Fact]
+    public void Pause_stop_and_resume_are_kept_per_repo()
+    {
+        using var store = StateStore.Open(DbPath);
+        var at = new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero);
+
+        store.Pause("repo", at);
+        store.Pause("repo", at.AddHours(1));
+        store.Stop("repo", "the agent isn't logged in", at.AddHours(2));
+
+        Assert.Equal(new RepoFlags(at, at.AddHours(2), "the agent isn't logged in"), store.Flags("repo"));
+        Assert.Equal(RepoFlags.None, store.Flags("other"));
+        Assert.Equal(new RepoFlags(at, at.AddHours(2), "the agent isn't logged in"), store.Resume("repo"));
+        Assert.Equal(RepoFlags.None, store.Flags("repo"));
+    }
+
+    [Fact]
+    public void An_account_pause_lasts_until_its_time_and_a_later_limit_replaces_it()
+    {
+        using var store = StateStore.Open(DbPath);
+        var at = new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero);
+
+        store.PauseAccount("claude-personal", at.AddHours(2), "resets 10am");
+        store.PauseAccount("claude-personal", at.AddHours(1), "resets 9am");
+
+        Assert.Equal(new AccountPause("claude-personal", at.AddHours(1), "resets 9am"), store.AccountPaused("claude-personal", at));
+        Assert.Null(store.AccountPaused("claude-personal", at.AddHours(1)));
+        Assert.Null(store.AccountPaused("copilot-work", at));
     }
 }

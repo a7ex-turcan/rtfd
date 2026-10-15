@@ -55,3 +55,20 @@ Nothing released yet. The design is in `docs/spec.md` and the build order in `do
 - A lost `state.db` is rebuilt from the hidden markers in rtfd's reviews on GitHub, so a lost store
   neither loses rtfd's threads nor posts a second review of a head.
 - The hidden marker in each review now names the head's merge base too.
+- `rtfd serve` watches every configured repo and reviews each new head once: after `quiet_period`
+  with no new push (five quick pushes, one review) and once CI has finished or `ci_max_wait` has
+  passed (the summary then says CI hadn't finished). Drafts, forks and authors outside `authors` are
+  skipped. A log line for every poll, in a file per day under `logs/`, kept 14 days. One serve per
+  data folder; Ctrl+C stops it without cutting a post short.
+- A usage limit pauses every repo on that agent account until the reset time, without spending an
+  attempt, and serve resumes by itself. `rtfd run` records the pause too.
+- An agent that isn't logged in, or isn't installed, stops the repo until `rtfd resume <repo>`.
+  A failing PR backs off, from `interval` up to an hour.
+- `rtfd status` says whether serve is running, stopped or hung, and per repo the last poll and every
+  open PR's state; with serve stopped, what the store knows. It exits 0 only while serve runs.
+- `rtfd pause <repo>` and `rtfd resume <repo>` stop and restart watching one repo, without a restart.
+- `rtfd run` waits for a repo serve is reviewing, and says so after 15 seconds.
+- A killed serve leaves nothing running: on Windows its agent goes with it, and the next start
+  deletes the leftover run folders and worktrees (not `--keep` ones).
+- Polls of GitHub are conditional, so an unchanged PR list or CI state doesn't count against the
+  rate limit.

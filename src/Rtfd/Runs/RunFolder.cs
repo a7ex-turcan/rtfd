@@ -38,6 +38,26 @@ public sealed class RunFolder
     public string McpConfigPath => System.IO.Path.Combine(Path, "mcp.json");
     public string GitToolsPath => System.IO.Path.Combine(Path, GitTools.GitToolsBinding.FileName);
 
+    /// <summary>Written when <c>--keep</c> leaves the folder and its worktree for a look; serve's startup sweep spares them.</summary>
+    public string KeptMarkerPath => System.IO.Path.Combine(Path, KeptMarker);
+
+    public const string KeptMarker = ".kept";
+
+    /// <summary>
+    /// The repo a run folder's name says it belongs to: <c>&lt;repo&gt;-&lt;pr&gt;-&lt;sha8&gt;-&lt;n&gt;</c>, read
+    /// from the right, since a repo name may hold dashes and the rest can't.
+    /// </summary>
+    public static string? RepoOf(string folderName)
+    {
+        var parts = folderName.Split('-');
+        return parts.Length >= 4
+            && parts[^1].Length > 0 && parts[^1].All(char.IsAsciiDigit)
+            && parts[^2].Length == 8 && parts[^2].All(char.IsAsciiHexDigitLower)
+            && parts[^3].Length > 0 && parts[^3].All(char.IsAsciiDigit)
+            ? string.Join('-', parts[..^3])
+            : null;
+    }
+
     /// <summary>Picks the first free <c>n</c> and creates the folder.</summary>
     public static RunFolder Create(DataDirectory data, string repo, int number, string head)
     {

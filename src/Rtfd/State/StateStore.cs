@@ -44,6 +44,24 @@ public sealed record ThreadRow(
 /// <summary>One cleared entry, for what <c>rtfd retry</c> prints.</summary>
 public sealed record ClearedAttempts(string Head, int Used, string? Blocked);
 
+/// <summary>A repo's flags: <c>rtfd pause</c>, and a stop after a fatal outcome. <c>rtfd resume</c> clears both.</summary>
+public sealed record RepoFlags(DateTimeOffset? PausedAt, DateTimeOffset? StoppedAt, string? StoppedReason)
+{
+    public static readonly RepoFlags None = new(null, null, null);
+}
+
+/// <summary>A usage limit on an agent account: every repo whose agent uses it waits until <paramref name="Until"/>.</summary>
+public sealed record AccountPause(string Account, DateTimeOffset Until, string? Message);
+
+/// <summary>The latest review of a PR that landed, for <c>status</c>.</summary>
+public sealed record LandedReview(int Pr, string Head, string Event, string? Url, DateTimeOffset At);
+
+/// <summary>A head's attempts and block, for <c>status</c>.</summary>
+public sealed record HeadAttempts(int Pr, string Head, int Used, string? Blocked);
+
+/// <summary>A PR's latest run, for <c>status</c>.</summary>
+public sealed record LastRun(int Pr, string Head, DateTimeOffset StartedAt, string? Outcome, string? Message);
+
 /// <summary>
 /// <c>state.db</c> in the data directory (plan Phase 3): SQLite in WAL mode, hand-written SQL,
 /// as in rtfc. A transaction is what makes the write-ahead record honest: the posting and the
@@ -51,7 +69,7 @@ public sealed record ClearedAttempts(string Head, int Used, string? Blocked);
 /// </summary>
 public sealed class StateStore : IDisposable
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly Lazy<string> Schema = new(() =>
     {
@@ -125,6 +143,13 @@ public sealed class StateStore : IDisposable
                 Execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
             }
 
+            if (version < 3)
+            {
+                // v3 (Phase 5, serve): repo pauses and stops, account pauses. Both tables are new,
+                // so schema.sql made them.
+                Execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
+            }
+
             transaction.Commit();
         }
     }
@@ -146,6 +171,11 @@ public sealed class StateStore : IDisposable
     public void FinishRun(long id, string outcome, string? message, DateTimeOffset now) => Execute(
         "UPDATE runs SET finished_at = $at, outcome = $outcome, message = $message WHERE id = $id",
         ("$id", id), ("$at", Time(now)), ("$outcome", outcome), ("$message", message));
+
+    /// <summary>Runs a killed process never finished, marked abandoned; call it holding the repo's lock. Returns how many.</summary>
+    public int AbandonUnfinishedRuns(string repo, DateTimeOffset now) => Execute(
+        "UPDATE runs SET finished_at = $at, outcome = 'abandoned', message = 'rtfd stopped before the run finished' WHERE repo = $repo AND finished_at IS NULL",
+        ("$repo", repo), ("$at", Time(now)));
 
     // ---- attempts ----
 
@@ -331,6 +361,89 @@ public sealed class StateStore : IDisposable
         }
     }
 
+    // ---- repos and accounts (Phase 5) ----
+
+    public RepoFlags Flags(string repo) => QuerySingle(
+        "SELECT paused_at, stopped_at, stopped_reason FROM repos WHERE repo = $repo",
+        r => new RepoFlags(TimeOrNull(r, 0), TimeOrNull(r, 1), StringOrNull(r, 2)),
+        ("$repo", repo)) ?? RepoFlags.None;
+
+    /// <summary><c>rtfd pause</c>. A repo already paused keeps the time it was paused.</summary>
+    public void Pause(string repo, DateTimeOffset now) => Execute(
+        """
+        INSERT INTO repos (repo, paused_at) VALUES ($repo, $at)
+        ON CONFLICT (repo) DO UPDATE SET paused_at = COALESCE(paused_at, excluded.paused_at)
+        """,
+        ("$repo", repo), ("$at", Time(now)));
+
+    /// <summary>A fatal outcome stops the repo until <c>rtfd resume</c> (spec "Agent adapter").</summary>
+    public void Stop(string repo, string reason, DateTimeOffset now) => Execute(
+        """
+        INSERT INTO repos (repo, stopped_at, stopped_reason) VALUES ($repo, $at, $reason)
+        ON CONFLICT (repo) DO UPDATE SET stopped_at = excluded.stopped_at, stopped_reason = excluded.stopped_reason
+        """,
+        ("$repo", repo), ("$at", Time(now)), ("$reason", reason));
+
+    /// <summary><c>rtfd resume</c>: lifts a pause and a stop, and returns what was there.</summary>
+    public RepoFlags Resume(string repo)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            var flags = Flags(repo);
+            Execute("UPDATE repos SET paused_at = NULL, stopped_at = NULL, stopped_reason = NULL WHERE repo = $repo", ("$repo", repo));
+            transaction.Commit();
+            return flags;
+        }
+    }
+
+    /// <summary>
+    /// A usage limit pauses the account until <paramref name="until"/>. A later limit replaces an
+    /// earlier one: the newest message knows the reset time best.
+    /// </summary>
+    public void PauseAccount(string account, DateTimeOffset until, string? message) => Execute(
+        """
+        INSERT INTO accounts (account, paused_until, message) VALUES ($account, $until, $message)
+        ON CONFLICT (account) DO UPDATE SET paused_until = excluded.paused_until, message = excluded.message
+        """,
+        ("$account", account), ("$until", Time(until)), ("$message", message));
+
+    /// <summary>The account's pause, while it lasts.</summary>
+    public AccountPause? AccountPaused(string account, DateTimeOffset now) =>
+        AccountPauses().FirstOrDefault(p => p.Account == account && p.Until > now);
+
+    /// <summary>Every account's last pause, over or not.</summary>
+    public IReadOnlyList<AccountPause> AccountPauses() => Query(
+        "SELECT account, paused_until, message FROM accounts WHERE paused_until IS NOT NULL ORDER BY account",
+        r => new AccountPause(r.GetString(0), ParseTime(r.GetString(1)), StringOrNull(r, 2)));
+
+    /// <summary>Each PR's latest review that landed, newest PR first.</summary>
+    public IReadOnlyList<LandedReview> LandedReviews(string repo) => Query(
+        """
+        SELECT p.pr, p.head, p.event, p.review_url, COALESCE(p.completed_at, p.started_at) FROM postings p
+        WHERE p.repo = $repo AND p.state IN ('verified', 'unverified')
+          AND p.id = (SELECT MAX(id) FROM postings q WHERE q.repo = p.repo AND q.pr = p.pr AND q.state IN ('verified', 'unverified'))
+        ORDER BY p.pr DESC
+        """,
+        r => new LandedReview((int)r.GetInt64(0), r.GetString(1), r.GetString(2), StringOrNull(r, 3), ParseTime(r.GetString(4))),
+        ("$repo", repo));
+
+    /// <summary>Every head with attempts used or a block.</summary>
+    public IReadOnlyList<HeadAttempts> AllAttempts(string repo) => Query(
+        "SELECT pr, head, used, blocked FROM attempts WHERE repo = $repo AND (used > 0 OR blocked IS NOT NULL) ORDER BY pr DESC, head",
+        r => new HeadAttempts((int)r.GetInt64(0), r.GetString(1), (int)r.GetInt64(2), StringOrNull(r, 3)),
+        ("$repo", repo));
+
+    /// <summary>Each PR's latest run.</summary>
+    public IReadOnlyList<LastRun> LastRuns(string repo) => Query(
+        """
+        SELECT r.pr, r.head, r.started_at, r.outcome, r.message FROM runs r
+        WHERE r.repo = $repo AND r.id = (SELECT MAX(id) FROM runs s WHERE s.repo = r.repo AND s.pr = r.pr)
+        ORDER BY r.pr DESC
+        """,
+        r => new LastRun((int)r.GetInt64(0), r.GetString(1), ParseTime(r.GetString(2)), StringOrNull(r, 3), StringOrNull(r, 4)),
+        ("$repo", repo));
+
     // ---- plumbing ----
 
     private const string PostingColumns = "id, run_id, repo, pr, head, merge_base, identity, event, started_at, state, review_id, review_url, message, reports";
@@ -341,6 +454,11 @@ public sealed class StateStore : IDisposable
         StringOrNull(r, 10), StringOrNull(r, 11), StringOrNull(r, 12), StringOrNull(r, 13)?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? []);
 
     public static string Time(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+
+    public static DateTimeOffset ParseTime(string text) =>
+        DateTimeOffset.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+
+    private static DateTimeOffset? TimeOrNull(SqliteDataReader r, int i) => r.IsDBNull(i) ? null : ParseTime(r.GetString(i));
 
     internal int Execute(string sql, params (string Name, object? Value)[] parameters)
     {

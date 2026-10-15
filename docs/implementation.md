@@ -4,6 +4,68 @@ Where the code goes further than [`spec.md`](spec.md) says, or settles something
 open, and why. The spec is updated in the same change (its "Decisions taken" log, from 42 on);
 this file keeps the reasoning that doesn't belong in the design. Newest first.
 
+## Phase 5 (2026-10-15)
+
+### One live run, shared by `rtfd run` and `serve`
+
+`RunCommand`'s posting path moved into `Runs/LiveRun.cs`, so a review from serve and one by hand go
+through the same recovery, gate, write-ahead record and finish. It also records a usage limit on
+the agent's account, whoever hit it: a manual run that hits the limit pauses serve too. Posting never
+takes serve's stop token. Once a review is decided it goes out, and a stop waits for it; a kill
+mid-post is what the write-ahead record is for.
+
+### What the watcher remembers, and what it asks the store
+
+Whether a head is reviewed, blocked or out of attempts comes from the store on every tick, so a
+manual `rtfd run`, `rtfd retry` or a rebuilt store shows at once. The watcher keeps only what
+doesn't matter after a restart: the detector's view of each PR (when its head was first seen, CI),
+backoffs, heads refused for good reasons (`RunReport.RefusedForHead`: no changes, an author or fork
+rtfd skips, the gate's refusals), and which skips it has already logged. A refusal about the setup
+(a missing prompt file) backs off instead, so fixing the file is enough.
+
+### A head the store doesn't know goes through a run, not a lookup
+
+On a fresh data directory every open PR looks unreviewed until `ReviewHistory` rebuilds it from the
+markers, which happens inside the run, before the gate. So serve's first pass on such a PR fetches
+and refuses ("already reviewed") without starting the agent, and the next tick reads it from the
+store. Checking the markers in the watcher would have been a second rebuild path.
+
+### `status` reads the lock, not a pid
+
+A pid in `status.json` can be reused by another process; the lock can't be held by anyone but a
+live serve. `status` takes the lock for an instant when nobody holds it, which a serve starting at
+that very moment would read as another instance; the window is a few microseconds.
+
+### The heartbeat has its own task
+
+A tick runs a review, which can take half an hour. If the ticks wrote the heartbeat, a long review
+would read as a hang. A separate task writes `status.json` every 30 seconds, and after every tick, so
+`status` sees a review start straight away.
+
+### Daily logs, kept 14 days, not configurable
+
+A key is easy to add when someone wants another number; until then 14 days is a constant in
+`ServeLog`. Lines are UTC like the store. The console gets the same lines, for a serve run by hand.
+
+### The job object is joined by serve only
+
+`ChildProcessJob` puts the whole process in a kill-on-close job, so it is called by `serve` and
+nothing else: `rtfd run` is interactive (Ctrl+C reaches its children through the console), and the
+test host must not join one. Verified live: serve killed with `Stop-Process -Force` 8 seconds into
+a review, and `claude.exe` and its `rtfd git-tools` were gone three seconds later.
+
+### Closing the console gives seconds
+
+On Windows closing the console window (`SIGHUP` in .NET's terms) lets the handler run, but the
+process is ended a few seconds later whatever it does. serve starts stopping like on Ctrl+C; a post
+cut short is settled by the write-ahead record at the next start. Phase 6 runs serve with no console.
+
+### CI was asked once
+
+The first version asked for CI only while the detector didn't know it, so a head seen with CI
+pending waited the whole `ci_max_wait`. `A_head_waits_for_CI_to_settle` caught it. CI is asked on
+every tick until it settles, which costs nothing while GitHub answers 304.
+
 ## Phase 4 (2026-10-15)
 
 ### The interdiff is `git merge-tree`, not a scratch worktree (spec decision 54)

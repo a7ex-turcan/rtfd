@@ -68,6 +68,15 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
     public int ReplyCalls { get; private set; }
     public int ResolveCalls { get; private set; }
 
+    /// <summary>Polls of the open PRs, for serve's tests.</summary>
+    public int ListCalls { get; private set; }
+
+    /// <summary>The PR is closed or merged: it's no longer in the open list.</summary>
+    public bool Closed { get; set; }
+
+    /// <summary>How many of the next reads of the PR fail with a 502.</summary>
+    public int PullRequestFailures { get; set; }
+
     public string Identity { get; set; } = "someone-else";
     public CiState Ci { get; set; } = new(CiSummary.None, []);
 
@@ -79,10 +88,22 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
     public Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new RepositoryInfo(false, "main"));
 
-    public Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<PullRequest>>([PullRequest]);
+    public Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default)
+    {
+        ListCalls++;
+        return Task.FromResult<IReadOnlyList<PullRequest>>(Closed ? [] : [PullRequest]);
+    }
 
-    public Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default) => Task.FromResult(PullRequest);
+    public Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default)
+    {
+        if (PullRequestFailures > 0)
+        {
+            PullRequestFailures--;
+            throw new ProviderException("GitHub answered 502 to repos/owner/repo/pulls/7.", 502);
+        }
+
+        return Task.FromResult(PullRequest);
+    }
 
     public Task<CiState> GetCiStateAsync(string sha, CancellationToken cancellationToken = default) => Task.FromResult(Ci);
 

@@ -8,12 +8,14 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 [rtfq](https://github.com/a7ex-turcan/rtfq) (databases) and
 [rtfc](https://github.com/a7ex-turcan/rtfc) (relay between sessions).
 
-**Status: early. It reviews, posts and follows up, one PR at a time.** `rtfd run <repo> --pr <n>`
-reviews a GitHub PR with Claude Code and posts the review once, crash-safe, then reads it back;
-`--dry-run` prints it instead. Run it again after a push and it reviews only what changed, and
-resolves its own threads the author fixed. `rtfd validate` checks the config, the tokens and
-exactly what the agent loads. Watching PRs on its own (`serve`) comes next. The design is
-[`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
+**Status: early. It watches, reviews, posts and follows up.** `rtfd serve` watches every configured
+repo and reviews each new head once, when the pushes have settled and CI has finished; `rtfd status`
+says whether it is watching. `rtfd run <repo> --pr <n>` reviews one GitHub PR with Claude Code now,
+posting once, crash-safe, and reading it back; `--dry-run` prints it instead. After a push, rtfd
+reviews only what changed and resolves its own threads the author fixed. `rtfd validate` checks the
+config, the tokens and exactly what the agent loads. Starting `serve` at logon (`install-service`)
+comes next. The design is [`docs/spec.md`](docs/spec.md) and the build order is
+[`docs/plan.md`](docs/plan.md).
 
 ---
 
@@ -217,7 +219,48 @@ Posted the review as COMMENT, with 0 inline comments, and 1 reply on earlier thr
 - **A lost `state.db`.** rtfd rebuilds what it needs from GitHub: every review it posted carries a
   hidden marker, and every comment leads with its severity.
 
-### 7. Make the reviews yours
+### 7. Leave it watching
+
+`rtfd serve` does what you've been doing by hand, for every repo in the config:
+
+```bash
+GH_TOKEN="$(gh auth token)" rtfd serve
+```
+
+```text
+2026-10-15T11:01:32Z sandbox: #2 has a new head, f80410e4
+2026-10-15T11:01:32Z sandbox: 2 open PRs: #1 reviewed; #2 quiet for 3m more
+2026-10-15T11:04:33Z sandbox: 2 open PRs: #1 reviewed; #2 due; reviewing now
+2026-10-15T11:05:07Z sandbox #2: posted the review as COMMENT, with 2 inline comments: https://github.com/...
+2026-10-15T11:05:09Z sandbox: 2 open PRs, nothing to do (#1 reviewed; #2 reviewed)
+```
+
+- **When.** Every `interval` (5m) it polls the open PRs. A new head waits until nothing has been
+  pushed for `quiet_period` (3m), so five quick pushes get one review, and until CI has finished, or
+  `ci_max_wait` (30m) has passed, when the summary says CI hadn't finished. A repo with no checks
+  doesn't wait. A CI result on a head that's already reviewed changes nothing; the next push gets the
+  next review.
+- **What.** Your `authors`' PRs, not drafts, not forks. Each head is reviewed once, and follow-ups
+  work as in step 6.
+- **Usage limits.** A limit pauses every repo on that agent `account` until the reset time Claude
+  gives, without spending an attempt, and serve goes on by itself afterwards.
+- **`rtfd status`** says whether serve is running (and exits 0), stopped, or hung, then per repo
+  the last poll and each open PR: reviewed, waiting and until when, out of attempts, blocked.
+- **`rtfd pause <repo>`** stops watching one repo and **`rtfd resume <repo>`** starts again, from
+  serve's next tick, no restart. Resume also lifts a stop after something only you can fix, such as
+  Claude being logged out.
+- **Stopping.** Ctrl+C. A post already on its way finishes; a review in progress is dropped and
+  runs again at the next start. If serve is killed instead, nothing is posted twice, and the next
+  start cleans up what it left.
+- **One at a time.** One serve per data folder. An `rtfd run` on a repo serve is reviewing waits a
+  few seconds, then says so.
+- **The config is read once**: restart serve after editing it (it logs that the file changed). The
+  prompt is read for every review, as with `run`.
+
+Until `rtfd install-service` arrives (it starts serve at logon, with no window), run it in a
+terminal you leave open. The log is also in `logs/` in the data folder, a file per day.
+
+### 8. Make the reviews yours
 
 `prompts/review.md` is the reviewer's brief: what to look at, how severe is severe, and how to
 write. rtfd re-reads it on every run, so edit it and run the same PR again until the review reads
@@ -233,8 +276,11 @@ points elsewhere.
 |---|---|
 | `mirrors/` | A bare git mirror per repo, fetched into on every run. Every head rtfd reviewed stays in it, so follow-ups work after a force-push |
 | `runs/`, `worktrees/` | One run's working folder and checkout. Deleted when the run ends, unless `--keep` |
-| `state.db` | What rtfd posted, with the hash of every body; its threads and their severities; the attempts used per head |
+| `state.db` | What rtfd posted, with the hash of every body; its threads and their severities; the attempts used per head; paused repos and accounts |
 | `git/` | An empty git config and hooks folder, so your own git setup never applies |
+| `logs/` | serve's log, `rtfd-yyyy-MM-dd.log`, one line per poll and per event, kept 14 days |
+| `status.json` | What serve is doing, rewritten every 30 seconds; `rtfd status` reads it |
+| `serve.lock`, `locks/` | One serve per data folder, and one worker per repo |
 
 ### When something goes wrong
 
@@ -248,7 +294,12 @@ points elsewhere.
 | `GitHub refused the token (401)` | The token expired, or can't see the repo |
 | `agent.tool_unexpected`, `agent.mcp_unexpected`, `agent.plugin_unexpected` | Something from outside rtfd loads into Claude. Please report it, with the `validate` output |
 | `agent.flag_missing` | Your Claude Code is too old for a flag rtfd needs: update it |
-| Folders left in `runs/` or `worktrees/` after a crash | Safe to delete |
+| Folders left in `runs/` or `worktrees/` after a crash | Safe to delete; serve's next start does it |
+| `rtfd serve: already running` | Another serve uses this data folder; `rtfd status` shows it |
+| `another rtfd is working on <repo> right now` | serve is reviewing one of its PRs; try again when it's done |
+| `rtfd serve is not responding` | It holds the lock but stopped writing its heartbeat: stop it and start it again |
+| `stopped: ... rtfd resume <repo>` | Fix what it says, then `rtfd resume <repo>` |
+| `not watched until serve restarts` | A token is missing or refused: fix it and restart serve |
 
 ---
 
@@ -324,17 +375,17 @@ each one is in the spec.
 | `rtfd validate` | Checks the config, the tokens and the agents, and prints each agent's tools | Built |
 | `rtfd run <repo> --pr 12` | One review now, posted once and read back; a follow-up when rtfd reviewed the PR before. `--dry-run` prints it instead | Built |
 | `rtfd retry <repo> --pr 12` | Gives a PR its attempts back, or lifts a secret block | Built |
-| `rtfd serve` | One long-running process for every configured repo | Phase 5 |
-| `rtfd status` | Per repo: alive, last poll, open PRs, last review, attempts left. Per agent account: paused until | Phase 5 |
-| `rtfd pause` / `rtfd resume <repo>` | Stops and restarts watching one repo | Phase 5 |
+| `rtfd serve` | One long-running process for every configured repo | Built |
+| `rtfd status` | Whether serve is running. Per repo: last poll, open PRs, last review, attempts left. Per agent account: paused until | Built |
+| `rtfd pause` / `rtfd resume <repo>` | Stops and restarts watching one repo, without a restart | Built |
 | `rtfd install-service` | Registers `serve` to start at logon, headless, with no battery stop and no time limit | Phase 6 |
 
 ## Roadmap
 
 - **v0: GitHub + Claude Code.** Built dry-run first: `rtfd run --dry-run` end to end against real
   PRs, then `validate`, posting, follow-ups, `serve` and the service.
-- **v1: Bitbucket + Copilot CLI.** Plus rebase handling, other reviewers' threads as context, and
-  notifications through rtfc.
+- **v1: Bitbucket + Copilot CLI.** Plus other reviewers' threads as context, and notifications
+  through rtfc.
 - **Later:** pre-review hooks (build, browser checks), an untrusted tier for public repos open to
   anyone, code suggestions, webhooks, GitLab and Azure DevOps.
 

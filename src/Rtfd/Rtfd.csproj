@@ -12,6 +12,9 @@
     <Version>0.1.0-dev</Version>
     <Product>rtfd</Product>
     <Description>Read The Fine Diff: a PR review watcher for any AI agent.</Description>
+
+    <!-- LibraryImport generates unsafe marshalling code: Processes/ChildProcessJob.cs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

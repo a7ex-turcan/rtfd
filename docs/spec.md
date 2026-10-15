@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe, with follow-ups) and `rtfd retry` exist; `serve` is next.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe, with follow-ups), `rtfd retry`, `rtfd serve`, `rtfd status` and `rtfd pause`/`resume` exist; `install-service` is next.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -255,9 +255,11 @@ If rtfd crashes between steps 1 and 3, the next run sees the unfinished record. 
 
 Each provider has its own quirks. For example, Bitbucket's comment list doesn't reliably report whether a thread is resolved, so each thread has to be checked through the single-comment endpoint. And inline anchors (`to`/`from` on Bitbucket, `line`/`side` on GitHub) differ between providers.
 
-**Change detector.** Triggers on a new PR, new commits or a CI change. It consumes events, so polling feeds it today and webhooks can feed it later. Before a review it waits for two things, separately:
+**Change detector.** Triggers on a new PR or new commits; CI only decides when (decision 60). It consumes events, so polling feeds it today and webhooks can feed it later. Before a review it waits for two things, separately:
 - **Quiet period:** no new pushes for `quiet_period`, so five quick pushes produce one review, not five. Only pushes reset it.
-- **CI settled:** all checks finished. A repo with no checks configured doesn't wait. Checks still pending after `ci_max_wait` don't block forever: the review goes ahead and the summary says CI hadn't finished. A later CI result triggers a CI-change pass as usual.
+- **CI settled:** all checks finished. A repo with no checks configured doesn't wait. Checks still pending after `ci_max_wait` don't block forever: the review goes ahead and the summary says CI hadn't finished. A later CI result triggers nothing: the head is reviewed, and the next push gets the next review.
+
+Both waits run from when rtfd first saw the head, so a `serve` that restarts waits one quiet period before reviewing a head pushed while it was down. Drafts, forks and authors outside the allowlist are skipped here, and a draft marked ready isn't a push: if its last push was a quiet period ago, it's due at once.
 
 It also decides what a follow-up pass looks at. rtfd keeps every head it reviews in its mirror (decision 53), so the last reviewed head is there even after a force-push removed it from the remote.
 - **A push, a base merge or a rebase:** rtfd builds the interdiff:
@@ -292,18 +294,17 @@ It sorts each run's outcome:
   - a time with no date that is already past today means tomorrow;
   - a date, when given (weekly limits), is used as is;
   - no time at all means a 30-minute pause;
-- `transient`: network, timeout. Retry with backoff;
-- `fatal`: auth, missing binary, or a secret not from the diff caught by the validator. Stop the repo (or the PR, for a secret) and surface it in `status`.
+- `transient`: network, timeout. Retry with backoff: within the run's attempts, then, in `serve`, per PR from the interval, doubling up to an hour (decision 67);
+- `fatal`: auth, missing binary, or a secret not from the diff caught by the validator. Stop the repo until `rtfd resume` (or the PR until `rtfd retry`, for a secret) and surface it in `status` (decision 64).
 
 **State store.** Per repo and PR:
 - the last reviewed head commit;
 - attempts per commit;
-- the last CI state seen;
 - the write-ahead posting records, with body hashes, and the ids of everything rtfd posted;
 - each of rtfd's threads with its severity, whether rtfd resolved it, and whether a hand resolve has been reported (resolution itself is always re-read from the provider);
 - the hash of the prompt file used for each review, so it's clear which prompt produced which tone.
 
-Per agent account: the paused-until time.
+Per repo: whether it is paused (`rtfd pause`) or stopped by a fatal outcome. Per agent account: the paused-until time.
 
 SQLite (decision 49).
 
@@ -317,8 +318,7 @@ SQLite (decision 49).
 - read-only context tools to offer the agent, if any;
 - path excludes and the diff size cap;
 - pre-review hooks (trusted repos only);
-- the posting identity, as a token env var name, never the value;
-- whether to re-review on a CI change only, or on any push.
+- the posting identity, as a token env var name, never the value.
 
 rtfd refuses to start a repo whose config contradicts itself:
 - `authors: ["*"]` on a public repo (visibility from the provider), while the untrusted tier doesn't exist;
@@ -409,12 +409,12 @@ repos:
 
 | Command | What it does |
 |---|---|
-| `rtfd serve` | One long-running process for every configured repo |
+| `rtfd serve` | One long-running process for every configured repo, one per data directory (decision 62) |
 | `rtfd install-service` | Registers `serve` as a Windows service or scheduled task with the settings learnt the hard way (no battery stop, no time limit, headless console), or a systemd/launchd unit |
-| `rtfd status` | Per repo: alive, last poll, open PRs, last review per PR, attempts left, blocked PRs. Per agent account: paused until |
+| `rtfd status` | Whether serve is running, stopped or hung (decision 63). Per repo: last poll, open PRs, last review per PR, attempts left, blocked PRs. Per agent account: paused until |
 | `rtfd run <repo> --pr 12 [--dry-run]` | One review now. Dry-run prints the inputs, the findings, the computed verdict and the review it would post, with any redactions marked |
 | `rtfd retry <repo> --pr 12` | Clears used-up attempts for the PR's head commit, or a secret block after it was looked at |
-| `rtfd pause/resume <repo>` | Replaces the `.stop` file convention |
+| `rtfd pause/resume <repo>` | Replaces the `.stop` file convention: a flag serve reads on every tick. `resume` also lifts a stop after a fatal outcome |
 | `rtfd validate` | Checks the config (including the contradictions above), the tokens (by calling the provider's whoami), the agent binaries, and prints each agent's **full effective tool list** |
 | `rtfd git-tools --run <folder>` | Internal: the per-review `rtfd-git` MCP server. Started by rtfd, not by hand |
 
@@ -459,6 +459,7 @@ The full list is two to three weeks of work, so it ships in steps. Each step rep
 - pre-review hooks (needed for the work-ui browser check, which keeps its script until then);
 - the `untrusted` tier, optionally with a container;
 - code suggestions;
+- a second pass on a reviewed head when its CI result changes (decision 60);
 - answering author replies on threads;
 - webhooks instead of polling;
 - "bring your own runner": emit a job that an open session picks up through rtfc;
@@ -556,6 +557,18 @@ From building Phase 4:
 57. **Hand resolves are reported for the severities that block** (the verdict rule's), once per thread, after the summary that says it landed. A Could or a MINOR resolved by hand changes no verdict, so it isn't worth a line.
 58. **Replies on rtfd's threads reach the agent only from the posting identity and the author allowlist.** On a public repo anyone can reply on a thread, and that is outside text (decision 19).
 59. **rtfd doesn't repeat its own Shoulds.** Its Should on a committed credential or on executable agent configuration is left out where one of its earlier threads already says it, so a follow-up doesn't open the same thread twice or count it twice.
+
+From building Phase 5:
+
+60. **CI only decides when a head is reviewed**, as the owner decided on 2026-10-15. A CI result on a head that is already reviewed triggers nothing, and there is no per-repo re-review policy in v0 (it moves to Later): one review per head stays absolute (decision 52). The verdict comes from the findings, so a CI pass couldn't change it.
+61. **Config edits need a restart in v0**, as the owner decided on 2026-10-15. `serve` reads the config once, logs when the file changes and `status` says so. Prompt files are read for every review either way.
+62. **One `serve` per data directory and one worker per repo**, by operating-system file locks that a crash releases: `serve.lock`, held for as long as serve runs, and `locks/<repo>.lock`, held by serve's tick and by `rtfd run`. A manual run waits 15 seconds for a poll to let go, then refuses rather than queue behind a review.
+63. **Running, stopped and hung are told apart by the lock and the heartbeat.** `serve` rewrites `status.json` every 30 seconds from a task of its own, so a long review doesn't look like a hang. `status` says running when serve holds the lock and the heartbeat is younger than two intervals, not responding when it holds the lock with an older one, and not running when nobody holds it.
+64. **A fatal outcome stops the repo where its fix happens.** An agent that isn't logged in, or isn't there, stops the repo in the store until `rtfd resume`, which works without a restart. A token that is missing or refused, or a config the provider shows to contradict itself, leaves the repo unwatched until serve restarts, because tokens are read when it starts.
+65. **A killed `serve` takes its agent with it.** On Windows serve joins a job object that kills every process in it when serve ends, however it ends, so no agent outlives serve with the worktree open. At startup each repo's sweep deletes the run folders and worktrees a stopped run left (not `--keep` ones), prunes the mirror's worktree records, and marks unfinished runs abandoned.
+66. **Polls are conditional requests.** The PR list, the check runs and the commit status are asked with the last answer's ETag; GitHub's 304 doesn't count against the rate limit (checked on 2026-10-15). CI is asked again on every tick until it settles.
+67. **A failing PR backs off on its own.** After a transient failure, or a post that may not have landed, a PR waits the interval, then twice that, up to an hour; a new head starts over. A failing poll backs the repo off the same way.
+68. **One review per tick, then a fresh poll.** A review can take half an hour, and a push may land meanwhile, so after a review the repo polls again at once instead of reviewing the next PR from a stale list.
 
 ## Open questions
 

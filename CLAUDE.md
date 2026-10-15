@@ -16,7 +16,7 @@ change, and record the reason in `docs/implementation.md`. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry` and the `rtfd-git` MCP server today; `serve`, `status` and the rest to come |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry`, `serve`, `status`, `pause`/`resume` and the `rtfd-git` MCP server today; `install-service` to come |
 | `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
 | `tests/FakeAgent/` | C# | A stand-in agent CLI, built as `claude`, with canned output, for tests |
 
@@ -61,8 +61,20 @@ with the provider's threads (own = stored id and the posting identity as author;
 the provider); `Git/Interdiff.cs` builds the interdiff with `git merge-tree` in the mirror, where
 every reviewed head is kept (`refs/rtfd/reviewed/<pr>/<sha>`, the owner's call). The validator
 takes rtfd's own threads, the verdict counts the ones still open, and `Poster` sends replies and
-resolves after the review, through the same write-ahead record. Next is Phase 5, `serve`. Update
-this section when a phase lands.
+resolves after the review, through the same write-ahead record.
+
+**Phase 5 is built** (2026-10-15): `rtfd serve` watches every repo (`Serve/`). `ServeHost` checks
+each repo with the provider once, runs a `RepoWatcher` loop per repo and a heartbeat that writes
+`status.json`; each tick reads the repo's flags, takes `locks/<repo>.lock` (shared with `rtfd run`),
+polls with conditional requests, lets `ChangeDetector` (events in: quiet period, CI wait, drafts,
+forks, authors) say what is due, checks the store, and reviews one PR through `Runs/LiveRun.cs`, the
+live path `rtfd run` uses too. A usage limit pauses the account in the store; a fatal agent outcome
+stops the repo until `rtfd resume`. `serve.lock` keeps one serve per data directory, and on Windows
+`Processes/ChildProcessJob.cs` makes a killed serve take its agent with it. `rtfd status` tells
+running, stopped and hung apart from the lock and the heartbeat. Owner's calls: CI only decides when
+(no CI-change pass), config edits need a restart, and the 48 h run is on the sandbox with nutrx at
+Phase 6's switchover. Not done yet: that 48 h run. Next is Phase 6, `install-service`. Update this
+section when a phase lands.
 
 ## Hard rules
 
@@ -241,6 +253,13 @@ Checked:
 - 2026-10-15, git 2.47.1: `git merge-tree --write-tree --no-messages --merge-base=<base> <ours>
   <theirs>` works in a bare repository: the first line of stdout is the tree, exit 1 is a conflict.
   It needs git 2.40 or later. The old watcher's comments end with `<!-- prwatch -->`.
+- 2026-10-15, GitHub REST, on the sandbox: the PR list, a commit's check runs and its combined status
+  answer `If-None-Match` with 304 when nothing changed, and `X-RateLimit-Remaining` stays the same.
+  The ETag a 304 carries is strong where the 200's was weak (`W/"..."`); sending the weak one works.
+- 2026-10-15, Windows 11: a process in a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` takes
+  its children down when it is killed. `serve` killed with `Stop-Process -Force` mid-review: Claude
+  Code (`claude.exe`) and its `rtfd git-tools` were gone three seconds later. `PosixSignalRegistration`
+  for SIGINT, SIGTERM, SIGHUP and SIGQUIT registers on Windows.
 
 ## Open decisions
 
@@ -248,8 +267,8 @@ Don't settle these silently in code. Raise them.
 
 - The spec's open questions (the name, isolation flags, a dedicated OS account, Bitbucket without a
   marker).
-- Every ❓ in `docs/plan.md`, such as config reloads in `serve` (Phase 5), a scheduled task or a
-  Windows service (Phase 6), and how rtfd reaches rtfc (Phase 7).
+- Every ❓ in `docs/plan.md`, such as a scheduled task or a Windows service (Phase 6), and how rtfd
+  reaches rtfc (Phase 7).
 
 ## Commands
 
@@ -260,6 +279,10 @@ dotnet format --verify-no-changes             # the formatting check CI runs
 dotnet run --project src/Rtfd -- --help       # the CLI
 dotnet run --project src/Rtfd -- validate --config examples/rtfd.yaml
 dotnet publish src/Rtfd -c Release -r win-x64 -p:PublishAot=true -o /some/dir   # the AOT binary
+
+# serve and status from a throwaway home whose config names the sandbox only (never nutrx, never ~/.rtfd):
+RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/Rtfd -- serve
+RTFD_HOME=/some/temp/home dotnet run --project src/Rtfd -- status
 
 # One review, printed instead of posted, from a throwaway home (never the real ~/.rtfd):
 RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/Rtfd -- run nutrx --pr 37 --dry-run --verbose
@@ -316,7 +339,8 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `src/Rtfd/` | `EntryPoint.cs` dispatch · `RtfdHome.cs` home and data directory · `Cli/` commands and args · `Config/` loader, cursor, model, built-ins per agent CLI, checks |
 | `src/Rtfd/` (Phase 1) | `Providers/` GitHub read side · `Git/` GitRunner, mirror, diff model, worktree and config reset · `Processes/` ProcessRunner, allowlisted environment · `Agents/` claude adapter, output extraction, outcomes, limit parser · `GitTools/` rtfd-git · `Review/` findings contract, validator, review builder and verdict, `Secrets/` · `Runs/` run folder, prompt, `ReviewRun`, dry-run printout |
 | `src/Rtfd/` (Phases 2 to 4) | `Agents/AgentProbe.cs` and `Config/ProviderChecks.cs` (validate) · `State/` the SQLite store and `schema.sql` · `Posting/` Poster (write-ahead posting, replies, resolves, recovery), StoreHooks (one review per head, attempts), ReviewHistory (the last review and rtfd's threads, rebuilt from markers when lost) · `Git/Interdiff.cs` · `Review/OwnThreads.cs` |
+| `src/Rtfd/` (Phase 5) | `Serve/` ServeHost (startup checks, a loop per repo, the heartbeat), RepoWatcher (one tick: flags, lock, poll, store, one review, the startup sweep), ChangeDetector, FileLock, ServeLog, StatusFile · `Runs/LiveRun.cs` (the live path of `run` and `serve`) · `Processes/ChildProcessJob.cs` · `Cli/` ServeCommand, StatusCommand, PauseCommand |
 | `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
-| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, crash seams), FakeAgent, RunHarness · `Recordings/github/` real GitHub answers, trimmed |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand) · `Recordings/github/` real GitHub answers, trimmed |
 | `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment, stdin and the run folder's inputs |
 | `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary |

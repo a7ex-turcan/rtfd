@@ -93,6 +93,13 @@ public sealed record RunReport
 
     /// <summary>Set when the run stopped before the agent: policy, or a problem with the setup.</summary>
     public string? Refused { get; set; }
+
+    /// <summary>
+    /// The refusal is about this PR at this head (already reviewed, attempts used up, blocked,
+    /// nothing to review, an author or fork rtfd skips): asking again changes nothing until the PR
+    /// does. Otherwise it is about the setup (a token, the prompt file), which can be fixed.
+    /// </summary>
+    public bool RefusedForHead { get; set; }
 }
 
 /// <summary>
@@ -134,6 +141,7 @@ public static class ReviewRun
             if (Refusal(repo, pr) is { } refusal)
             {
                 report.Refused = refusal;
+                report.RefusedForHead = true;
                 return report;
             }
 
@@ -167,6 +175,7 @@ public static class ReviewRun
             if (diff.Files.Count == 0)
             {
                 report.Refused = $"the PR has no changes against {pr.BaseRef}: its head is already there";
+                report.RefusedForHead = true;
                 return report;
             }
 
@@ -198,6 +207,7 @@ public static class ReviewRun
                 if (gate.Refusal is { } refused)
                 {
                     report.Refused = refused;
+                    report.RefusedForHead = true;
                     return report;
                 }
 
@@ -251,6 +261,11 @@ public static class ReviewRun
 
                     await Folders.DeleteAsync(run.WorktreePath).ConfigureAwait(false);
                     await Folders.DeleteAsync(run.Path).ConfigureAwait(false);
+                }
+                else if (Directory.Exists(run.Path))
+                {
+                    // Kept on purpose: serve's startup sweep leaves it. Written last, so a run killed midway has none.
+                    File.WriteAllText(run.KeptMarkerPath, "");
                 }
             }
         }

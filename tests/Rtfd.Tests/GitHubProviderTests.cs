@@ -114,6 +114,28 @@ public sealed class GitHubProviderTests
         Assert.Equal(["aot", "build (ubuntu-latest)", "build (windows-latest)"], ci.Checks.Select(c => c.Name).Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public async Task A_poll_sends_the_last_ETag_and_a_304_reuses_the_page_it_stands_for()
+    {
+        var (provider, handler, _, _) = Create("a7ex-turcan/rtfd");
+        const string sha = "a817cb595f4d11c9091479ee21df5d6511ad524b";
+        var runs = $"/repos/a7ex-turcan/rtfd/commits/{sha}/check-runs?per_page=100";
+        var status = $"/repos/a7ex-turcan/rtfd/commits/{sha}/status?per_page=100";
+        handler.On(runs, HttpStatusCode.OK, Recording("check-runs.json"), ("ETag", "W/\"runs-1\""))
+            .On(runs, HttpStatusCode.NotModified, "");
+        handler.On(status, HttpStatusCode.OK, Recording("status.json"), ("ETag", "W/\"status-1\""))
+            .On(status, HttpStatusCode.NotModified, "");
+
+        var first = await provider.GetCiStateAsync(sha, TestContext.Current.CancellationToken);
+        var second = await provider.GetCiStateAsync(sha, TestContext.Current.CancellationToken);
+
+        Assert.Equal(first.Checks, second.Checks);
+        Assert.Equal(CiSummary.Success, second.Summary);
+        var conditional = handler.Requests.Skip(2).Select(r => r.Request.Headers.TryGetValues("If-None-Match", out var v) ? v.Single() : null).ToList();
+        Assert.Equal(["W/\"runs-1\"", "W/\"status-1\""], conditional);
+        Assert.All(handler.Requests.Take(2), r => Assert.False(r.Request.Headers.Contains("If-None-Match")));
+    }
+
     [Theory]
     [InlineData(new[] { "completed:success", "in_progress:" }, CiSummary.Pending)]
     [InlineData(new[] { "completed:success", "completed:failure" }, CiSummary.Failure)]

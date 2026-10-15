@@ -20,6 +20,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
 
     private const int MaxAttempts = 4;
 
+    private const int MaxCachedPages = 200;
+
     private const string ThreadsQuery = """
         query($owner: String!, $name: String!, $number: Int!, $after: String) {
           repository(owner: $owner, name: $name) {
@@ -48,6 +50,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
     private readonly string _name;
     private readonly ProviderToken _token;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly Dictionary<string, CachedPage> _pages = new(StringComparer.Ordinal);
+    private readonly Lock _pagesLock = new();
 
     /// <param name="slug"><c>owner/name</c>.</param>
     /// <param name="token">Sent as the bearer token, and to git for fetches only.</param>
@@ -82,10 +86,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
         string? next = $"repos/{_slug}/pulls?state=open&per_page=100";
         while (next is not null)
         {
-            using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, next), cancellationToken).ConfigureAwait(false);
-            var page = await ReadAsync(response, GitHubJson.Default.ListGhPull, cancellationToken).ConfigureAwait(false);
+            (var page, next) = await GetPageAsync(next, GitHubJson.Default.ListGhPull, cancellationToken).ConfigureAwait(false);
             pulls.AddRange(page.Select(Map));
-            next = NextLink(response);
         }
 
         return pulls;
@@ -101,12 +103,11 @@ public sealed class GitHubProvider : IProvider, IDisposable
         string? next = $"repos/{_slug}/commits/{sha}/check-runs?per_page=100";
         while (next is not null)
         {
-            using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, next), cancellationToken).ConfigureAwait(false);
-            runs.AddRange((await ReadAsync(response, GitHubJson.Default.GhCheckRuns, cancellationToken).ConfigureAwait(false)).CheckRuns);
-            next = NextLink(response);
+            (var page, next) = await GetPageAsync(next, GitHubJson.Default.GhCheckRuns, cancellationToken).ConfigureAwait(false);
+            runs.AddRange(page.CheckRuns);
         }
 
-        var status = await GetAsync($"repos/{_slug}/commits/{sha}/status?per_page=100", GitHubJson.Default.GhCombinedStatus, cancellationToken).ConfigureAwait(false);
+        var (status, _) = await GetPageAsync($"repos/{_slug}/commits/{sha}/status?per_page=100", GitHubJson.Default.GhCombinedStatus, cancellationToken).ConfigureAwait(false);
 
         checks.AddRange(runs.Select(r => new CiCheck(r.Name, r.Status, r.Conclusion, r.HtmlUrl)));
         checks.AddRange(status.Statuses.Select(s => new CiCheck(s.Context, s.State == "pending" ? "pending" : "completed", s.State == "pending" ? null : s.State, s.TargetUrl)));
@@ -309,6 +310,82 @@ public sealed class GitHubProvider : IProvider, IDisposable
         Url = pull.HtmlUrl,
     };
 
+    /// <summary>
+    /// A GET that <c>serve</c> repeats every poll: sent with the ETag of the last answer, so
+    /// GitHub says 304 when nothing changed, and a 304 doesn't count against the rate limit
+    /// (plan Phase 5; checked on the sandbox on 2026-10-15).
+    /// </summary>
+    private async Task<(T Value, string? Next)> GetPageAsync<T>(string url, JsonTypeInfo<T> type, CancellationToken cancellationToken)
+    {
+        CachedPage? cached;
+        lock (_pagesLock)
+        {
+            cached = _pages.GetValueOrDefault(url);
+        }
+
+        using var response = await SendAsync(() =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (cached is not null)
+            {
+                request.Headers.TryAddWithoutValidation("If-None-Match", cached.ETag);
+            }
+
+            return request;
+        }, cancellationToken).ConfigureAwait(false);
+
+        if (response.StatusCode == HttpStatusCode.NotModified && cached is not null)
+        {
+            Remember(url, cached with { Used = DateTimeOffset.UtcNow });
+            return (Parse(cached.Body, type, url), cached.Next);
+        }
+
+        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        var next = NextLink(response);
+        if (response.Headers.ETag is { } etag)
+        {
+            Remember(url, new CachedPage(etag.ToString(), body, next, DateTimeOffset.UtcNow));
+        }
+
+        return (Parse(body, type, url), next);
+    }
+
+    private void Remember(string url, CachedPage page)
+    {
+        lock (_pagesLock)
+        {
+            // Check runs are per commit, so pages for old heads pile up over days: keep the last hour's.
+            if (_pages.Count >= MaxCachedPages && !_pages.ContainsKey(url))
+            {
+                foreach (var stale in _pages.Where(p => p.Value.Used < DateTimeOffset.UtcNow.AddHours(-1)).Select(p => p.Key).ToList())
+                {
+                    _pages.Remove(stale);
+                }
+
+                if (_pages.Count >= MaxCachedPages)
+                {
+                    _pages.Clear();
+                }
+            }
+
+            _pages[url] = page;
+        }
+    }
+
+    private static T Parse<T>(byte[] body, JsonTypeInfo<T> type, string url)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(body, type) ?? throw new ProviderException($"GitHub sent an empty answer to {url}");
+        }
+        catch (JsonException ex)
+        {
+            throw new ProviderException($"GitHub sent an answer rtfd can't read ({url}): {ex.Message}");
+        }
+    }
+
+    private sealed record CachedPage(string ETag, byte[] Body, string? Next, DateTimeOffset Used);
+
     private async Task<T> GetAsync<T>(string path, JsonTypeInfo<T> type, CancellationToken cancellationToken)
     {
         using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, path), cancellationToken).ConfigureAwait(false);
@@ -370,7 +447,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
                 throw new ProviderException("GitHub didn't answer in time");
             }
 
-            if (response.IsSuccessStatusCode)
+            // A 304 only ever answers a conditional GET, whose caller has the page it stands for.
+            if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotModified)
             {
                 return response;
             }

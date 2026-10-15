@@ -96,6 +96,38 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $out -notmatch 'nothing to clear') { throw "the state store didn't open:`n$out" }
           if (-not (Test-Path (Join-Path $env:RTFD_HOME state.db))) { throw "no state.db was created" }
 
+      - name: The published binary serves, reports its status and keeps one instance
+        shell: pwsh
+        run: |
+          # No token in the environment, so serve watches nothing and nothing reaches GitHub; the
+          # point is the status file, the locks, the signals and the job object after trimming.
+          $home_ = Join-Path $env:RUNNER_TEMP rtfd-serve
+          New-Item -ItemType Directory -Force (Join-Path $home_ prompts) | Out-Null
+          Copy-Item examples/prompts/review.md (Join-Path $home_ prompts)
+          Copy-Item examples/rtfd.yaml (Join-Path $home_ rtfd.yaml)
+          $env:RTFD_HOME = $home_
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+
+          $serve = Start-Process ./publish/rtfd.exe -ArgumentList 'serve' -PassThru -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP serve.err)
+          $status = Join-Path $home_ status.json
+          for ($i = 0; $i -lt 100 -and -not (Test-Path $status); $i++) { Start-Sleep -Milliseconds 200 }
+          if (-not (Test-Path $status)) { throw "serve wrote no status.json:`n$(Get-Content (Join-Path $env:RUNNER_TEMP serve.err) -Raw)" }
+
+          $out = ./publish/rtfd.exe status | Out-String
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'rtfd serve is running' -or $out -notmatch 'GH_TOKEN') { throw "status didn't see serve running:`n$out" }
+          $out = ./publish/rtfd.exe serve 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch 'already running') { throw "a second serve wasn't refused:`n$out" }
+          $out = ./publish/rtfd.exe pause sandbox | Out-String
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'paused') { throw "pause failed:`n$out" }
+          $out = ./publish/rtfd.exe resume sandbox | Out-String
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'lifted the pause') { throw "resume failed:`n$out" }
+
+          Stop-Process -Id $serve.Id -Force
+          $serve.WaitForExit()
+          $out = ./publish/rtfd.exe status | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch "didn't stop cleanly") { throw "status didn't see serve gone:`n$out" }
+          exit 0
+
       - name: rtfd-git refuses hostile arguments in the published binary
         shell: pwsh
         run: |

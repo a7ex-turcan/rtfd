@@ -21,10 +21,6 @@ public static class EntryPoint
     /// <summary>Commands from the spec's CLI table that aren't built yet, and the plan phase that brings each.</summary>
     internal static readonly IReadOnlyDictionary<string, string> NotYetBuilt = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["serve"] = "Phase 5",
-        ["status"] = "Phase 5",
-        ["pause"] = "Phase 5",
-        ["resume"] = "Phase 5",
         ["install-service"] = "Phase 6",
     };
 
@@ -59,6 +55,14 @@ public static class EntryPoint
                     return RunCommand.Run(ctx, rest);
                 case "retry":
                     return RetryCommand.Run(ctx, rest);
+                case "serve":
+                    return ServeCommand.Run(ctx, rest);
+                case "status":
+                    return StatusCommand.Run(ctx, rest);
+                case "pause":
+                    return PauseCommand.Run(ctx, rest, pause: true);
+                case "resume":
+                    return PauseCommand.Run(ctx, rest, pause: false);
                 case "git-tools":
                     return GitToolsCommand.Run(ctx, rest, stdin ?? Console.In);
                 case var command when NotYetBuilt.TryGetValue(command, out var phase):
@@ -86,9 +90,9 @@ public static class EntryPoint
           run <repo> --pr <n>              one review now, posted and read back
               [--dry-run] [--inputs-only] [--keep] [--verbose] [--config <path>]
           retry <repo> --pr <n>            give a PR its attempts back, or lift a secret block
-          serve                            watch every configured repo (Phase 5)
-          status                           is it watching, and what has it done (Phase 5)
-          pause <repo> | resume <repo>     stop or restart watching one repo (Phase 5)
+          serve [--config <path>]          watch every configured repo; Ctrl+C stops it
+          status [--config <path>]         is serve watching, and what has it done
+          pause <repo> | resume <repo>     stop or restart watching one repo, without a restart
           install-service                  start serve at logon, headless (Phase 6)
           git-tools --run <folder>         internal: the rtfd-git MCP server, started by the agent
           --version

@@ -88,7 +88,7 @@ public sealed class PostingTests : IDisposable
         var review = Assert.Single(Provider.Reviews);
         Assert.Equal(_pr.HeadSha, review.CommitId);
         Assert.StartsWith("Not ready: 1 Should open.", review.Body, StringComparison.Ordinal);
-        Assert.Matches($"<!-- rtfd sha={_pr.HeadSha} run=\\d+ -->$", review.Body);
+        Assert.Matches($"<!-- rtfd sha={_pr.HeadSha} base=[0-9a-f]{{40}} run=\\d+ -->$", review.Body);
         Assert.Equal(2, review.Comments.Count);
         Assert.Contains("Posted the review as COMMENT, with 2 inline comments.", stdout, StringComparison.Ordinal);
         Assert.Contains("Read back from GitHub: the summary, the event and every inline comment are there as sent.", stdout, StringComparison.Ordinal);
@@ -97,7 +97,7 @@ public sealed class PostingTests : IDisposable
         var landed = store.LandedPosting("repo", 7, _pr.HeadSha)!;
         Assert.Equal(("verified", review.Id), (landed.State, landed.ReviewId));
         Assert.All(store.Bodies(landed.Id).Skip(1), b => Assert.NotNull(b.CommentId));
-        Assert.Equal(_pr.HeadSha, store.LastReviewedHead("repo", 7));
+        Assert.Equal(_pr.HeadSha, store.LastReviewed("repo", 7)?.Head);
     }
 
     [Fact]

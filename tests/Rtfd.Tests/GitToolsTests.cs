@@ -144,6 +144,49 @@ public sealed class GitToolsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task On_a_follow_up_after_a_rebase_the_last_reviewed_commits_are_allowed_and_the_base_still_isn_t()
+    {
+        // The PR rebased onto main: a new head whose merge base is the commit that was "outside".
+        var cancel = TestContext.Current.CancellationToken;
+        _git.Branch("rebased");
+        var rebasedHead = _git.Commit("First and second, rebased", new Dictionary<string, string?> { ["src/app.txt"] = "one\ntwo\nthree\nfour\n", ["src/new.txt"] = "new\n" });
+        _git.Checkout("main");
+        var stillOutside = _git.Commit("Later on main", new Dictionary<string, string?> { ["src/later.txt"] = "later\n" });
+
+        var mirror = Mirror.For(_git.Data, "repo", _git.Git);
+        await mirror.KeepAsync(1, _head, cancel);
+        var commits = await mirror.FetchAsync(new FetchSource(_git.Origin, "refs/heads/rebased", null), 1, "main", cancel);
+        var runFolder = Path.Combine(_git.Root, "run-follow-up");
+        Directory.CreateDirectory(runFolder);
+        var binding = new GitToolsBinding(mirror.Path, Path.Combine(_git.Root, "worktree"), commits.Head, commits.MergeBase, _head, _git.Data.GitDirectory)
+        {
+            LastMergeBase = _mergeBase,
+        };
+        binding.Write(runFolder);
+
+        IToolHost host = Environment.GetEnvironmentVariable("RTFD_BINARY") is { Length: > 0 } binary
+            ? ProcessHost.Start(binary, runFolder)
+            : new InProcessHost(await GitToolset.OpenAsync(binding, Environment.GetEnvironmentVariable, cancel));
+        try
+        {
+            var lastHead = await host.CallAsync("show", new JsonObject { ["sha"] = _head });
+            var lastCommit = await host.CallAsync("show", new JsonObject { ["sha"] = _firstPrCommit, ["path"] = "src/app.txt" });
+            var across = await host.CallAsync("diff", new JsonObject { ["from"] = _head, ["to"] = rebasedHead });
+            var outside = await host.CallAsync("show", new JsonObject { ["sha"] = stillOutside });
+
+            Assert.False(lastHead.IsError, lastHead.Text);
+            Assert.False(lastCommit.IsError, lastCommit.Text);
+            Assert.False(across.IsError, across.Text);
+            Assert.True(outside.IsError);
+            Assert.Contains("the head you reviewed last time", outside.Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            (host as IDisposable)?.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task The_server_lists_four_read_only_tools()
     {
         var tools = await _host.ListAsync();

@@ -31,7 +31,7 @@ public sealed class GitHubLiveTests
         var cancel = TestContext.Current.CancellationToken;
         var pr = await provider.GetPullRequestAsync(1, cancel);
         var stamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        var body = $"MINOR: rtfd's live test checks that a review reads back as sent ({stamp}).\n\nA second paragraph, with `code` and a trailing space. \n\n{Poster.Marker(pr.HeadSha, 0)}";
+        var body = $"MINOR: rtfd's live test checks that a review reads back as sent ({stamp}).\n\nA second paragraph, with `code` and a trailing space. \n\n{Poster.Marker(pr.HeadSha, null, 0)}";
         ReviewPostComment[] comments =
         [
             new("tally/counter.py", 26, DiffSide.New, $"MINOR: live test comment one ({stamp})."),
@@ -49,6 +49,30 @@ public sealed class GitHubLiveTests
         Assert.Equal(comments.Select(c => Poster.Hash(c.Body)).Order(), read.Comments.Select(c => Poster.Hash(c.Body)).Order());
         Assert.Contains(listed, r => r.Id == posted.Id && Poster.Hash(r.Body) == Poster.Hash(body));
         Assert.StartsWith("https://github.com/", posted.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_reply_and_a_resolve_land_on_rtfd_s_own_thread()
+    {
+        using var provider = Provider();
+        var cancel = TestContext.Current.CancellationToken;
+        var pr = await provider.GetPullRequestAsync(1, cancel);
+        var stamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        var posted = await provider.PostReviewAsync(new ReviewPost(1, pr.HeadSha, Verdict.Comment,
+            $"MINOR: rtfd's live test of replies and resolves ({stamp}).\n\n{Poster.Marker(pr.HeadSha, null, 0)}",
+            [new("tally/counter.py", 26, DiffSide.New, $"MINOR: live test thread ({stamp}).")]), cancel);
+        var root = Assert.Single(await provider.ListReviewCommentsAsync(1, cancel), c => c.ReviewId == posted.Id);
+
+        var reply = await provider.ReplyAsync(1, root.Id, "Looks good now.", cancel);
+        var thread = (await provider.GetReviewThreadsAsync(1, cancel)).Single(t => t.Comments[0].Id.ToString(System.Globalization.CultureInfo.InvariantCulture) == root.Id);
+        await provider.ResolveThreadAsync(thread.Id, cancel);
+        await provider.ResolveThreadAsync(thread.Id, cancel);
+        var after = (await provider.GetReviewThreadsAsync(1, cancel)).Single(t => t.Id == thread.Id);
+
+        Assert.Equal((26, root.Id), (root.OriginalLine, reply.InReplyTo));
+        Assert.False(thread.IsResolved);
+        Assert.True(after.IsResolved);
+        Assert.Equal(Poster.Hash("Looks good now."), Poster.Hash(after.Comments[^1].Body));
     }
 
     [Fact]

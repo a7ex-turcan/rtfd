@@ -12,7 +12,7 @@ public sealed record ReviewCommits(string Head, string BaseTip, string MergeBase
 /// <summary>
 /// rtfd's own bare mirror of a repo, <c>&lt;data&gt;/mirrors/&lt;repo&gt;.git</c> (spec decision 33).
 /// It never touches the user's clones, and its config is rtfd's alone. Each run fetches just the
-/// base branch and the PR head into <c>refs/rtfd/</c>.
+/// base branch and the PR head into <c>refs/rtfd/</c>, and every head a live run reviews is kept.
 /// </summary>
 public sealed class Mirror(GitRunner git, string path)
 {
@@ -60,6 +60,31 @@ public sealed class Mirror(GitRunner git, string path)
         var mergeBase = (await git.RunCheckedAsync(Path, ["merge-base", baseTip, head], cancellationToken: cancellationToken).ConfigureAwait(false)).Trim();
         return new ReviewCommits(head, baseTip, mergeBase);
     }
+
+    /// <summary>
+    /// Keeps a reviewed head as <c>refs/rtfd/reviewed/&lt;pr&gt;/&lt;sha&gt;</c>, so a force-push upstream
+    /// can't take it away: the next follow-up's interdiff starts from it, rebase or not.
+    /// </summary>
+    public async Task KeepAsync(int number, string sha, CancellationToken cancellationToken = default) =>
+        await git.RunCheckedAsync(Path, ["update-ref", ReviewedRef(number, sha), await ResolveAsync(sha, cancellationToken).ConfigureAwait(false)], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Fetches one commit by SHA into the kept refs, for a reviewed head the mirror doesn't have
+    /// (a new data directory, a rebuilt store). False when the remote won't serve it.
+    /// </summary>
+    public async Task<bool> FetchCommitAsync(FetchSource source, int number, string sha, CancellationToken cancellationToken = default)
+    {
+        await EnsureAsync(cancellationToken).ConfigureAwait(false);
+        var result = await git.RunAsync(Path,
+        [
+            "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+            source.Url,
+            $"+{sha}:{ReviewedRef(number, sha)}",
+        ], source.Credential, timeout: TimeSpan.FromMinutes(10), cancellationToken: cancellationToken).ConfigureAwait(false);
+        return result.Ok && await TryResolveAsync(sha, cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    private static string ReviewedRef(int number, string sha) => $"refs/rtfd/reviewed/{number}/{sha}";
 
     /// <summary>A full SHA the mirror has as a commit, or null.</summary>
     public async Task<string?> TryResolveAsync(string sha, CancellationToken cancellationToken = default)

@@ -4,6 +4,58 @@ Where the code goes further than [`spec.md`](spec.md) says, or settles something
 open, and why. The spec is updated in the same change (its "Decisions taken" log, from 42 on);
 this file keeps the reasoning that doesn't belong in the design. Newest first.
 
+## Phase 4 (2026-10-15)
+
+### The interdiff is `git merge-tree`, not a scratch worktree (spec decision 54)
+
+The plan applied the old PR diff in a scratch worktree. `git merge-tree --write-tree --merge-base`
+does the same apply as a three-way merge, inside the bare mirror: nothing is checked out, so no
+file from the PR is written anywhere, and a conflict is exit code 1. It is more forgiving than
+`git apply` (context that moved still merges) and needs git 2.40; an older git fails the run with a
+message saying so, rather than quietly reviewing the whole PR every time. A merge driver from a
+PR's `.gitattributes` can't run: drivers need config, and the mirror's config is rtfd's.
+
+### A rebuild reads the PR's comment list, and counts resolved threads as rtfd's
+
+GitHub's list of a review's own comments has `line: null` for every comment; the PR's comment list
+has the line, the review id and `in_reply_to_id`, so the rebuild uses that. A thread that was
+already resolved can't be told apart: GitHub's `resolvedBy` names the owner either way. Counting it
+as resolved by rtfd means a lost store never makes a summary claim that someone closed a thread
+by hand when rtfd did; the cost is that a hand resolve not yet reported when the store was lost
+goes unreported.
+
+### Every reply gets an empty review
+
+Found on the sandbox: `POST /pulls/{n}/comments/{id}/replies` creates a COMMENTED review with an
+empty body for each reply. Crash recovery matches reviews by the summary's hash and the rebuild
+looks for the marker, so neither mistakes one for rtfd's review. The fake provider does the same.
+
+### A resolve is recorded before it is sent
+
+If rtfd crashed after GitHub resolved a thread and before the store said so, the next run would see
+a resolved thread rtfd hadn't resolved: a hand resolve, reported in a summary, which would be false.
+Recorded first, the worst case is the opposite: a resolve that failed leaves the thread open on
+GitHub, which decides, so it still counts; only a later hand resolve of that thread goes
+unreported.
+
+### The interdiff's size cap doesn't make the review partial
+
+Excludes and the cap apply to the interdiff as the plan says, and files the cap leaves out are
+named in the prompt. The review is partial only when the full diff is: the agent has the full diff
+either way, and a revert can make an interdiff bigger than the PR.
+
+### A dry run reads the store
+
+So the follow-up a dry run prints is the one a live run would do, with the same threads and the
+same interdiff. It records nothing: a PR the store doesn't know is rebuilt in memory, and a home
+without a `state.db` still gets none.
+
+### The marker carries the merge base
+
+Without it, a rebuild would work the old merge base out from the old head and today's base branch,
+which is right unless the PR was stacked on a branch that has since merged. Old markers without
+`base=` still parse.
+
 ## Phase 3 (2026-10-13)
 
 ### Body hashes ignore line endings and trailing whitespace

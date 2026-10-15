@@ -115,7 +115,7 @@ public sealed class ValidatorTests
         Task.FromResult<string?>(path != "a.py" ? null : side == DiffSide.New ? Head : Base);
 
     private static async Task<ValidationResult> ValidateAsync(params Finding[] findings) =>
-        await Validator.ValidateAsync(new FindingsDocument("s", findings, []), Diff(), Read, new HashSet<string>());
+        await Validator.ValidateAsync(new FindingsDocument("s", findings, []), Diff(), Read, []);
 
     [Fact]
     public async Task A_wrong_line_snaps_to_the_anchor()
@@ -167,7 +167,7 @@ public sealed class ValidatorTests
         var diff = DiffModel.Parse("M\0b.txt\0", "diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1,1 +1,1 @@\n-line one\n+line 1\n");
         var result = await Validator.ValidateAsync(
             new FindingsDocument("s", [new Finding(FindingSeverity.Minor, "b.txt", 25, DiffSide.New, "line 25", "MINOR: x")], []),
-            diff, (_, _) => Task.FromResult<string?>(file), new HashSet<string>());
+            diff, (_, _) => Task.FromResult<string?>(file), []);
 
         Assert.Empty(result.Inline);
         Assert.Equal(("b.txt", 25), (result.Folded[0].Path, result.Folded[0].Line));
@@ -178,9 +178,49 @@ public sealed class ValidatorTests
     {
         var result = await Validator.ValidateAsync(
             new FindingsDocument("s", [], [new ThreadAction("PRRT_someone", ThreadActionKind.Resolve, null)]),
-            Diff(), Read, new HashSet<string>());
+            Diff(), Read, []);
 
         Assert.Contains("isn't one of your threads", Assert.Single(result.Errors), StringComparison.Ordinal);
+    }
+
+    private static OwnThread Own(string id, bool open = true) => new()
+    {
+        Id = id,
+        ThreadId = $"PRRT_{id}",
+        Severity = FindingSeverity.Should,
+        Path = "a.py",
+        PostedLine = 3,
+        Body = "Should: x",
+        PostedOn = new string('a', 40),
+        State = open ? OwnThreadState.Open : OwnThreadState.ResolvedByHand,
+        CountsOpen = open,
+    };
+
+    [Fact]
+    public async Task A_resolve_without_a_reply_gets_the_convention_s_words()
+    {
+        var result = await Validator.ValidateAsync(
+            new FindingsDocument("s", [], [new ThreadAction("11", ThreadActionKind.Resolve, null), new ThreadAction("12", ThreadActionKind.Reply, "Still empty-list unsafe.")]),
+            Diff(), Read, [Own("11"), Own("12")]);
+
+        Assert.Empty(result.Errors);
+        Assert.Equal(["Looks good now.", "Still empty-list unsafe."], result.Threads.Select(t => t.Reply));
+    }
+
+    [Fact]
+    public async Task An_own_thread_named_twice_is_refused_and_one_already_closed_is_dropped()
+    {
+        var twice = await Validator.ValidateAsync(
+            new FindingsDocument("s", [], [new ThreadAction("11", ThreadActionKind.Resolve, null), new ThreadAction("11", ThreadActionKind.Reply, "And also.")]),
+            Diff(), Read, [Own("11")]);
+        var closed = await Validator.ValidateAsync(
+            new FindingsDocument("s", [], [new ThreadAction("11", ThreadActionKind.Resolve, null)]),
+            Diff(), Read, [Own("11", open: false)]);
+
+        Assert.Contains("named twice", Assert.Single(twice.Errors), StringComparison.Ordinal);
+        Assert.Empty(closed.Errors);
+        Assert.Empty(closed.Threads);
+        Assert.Contains("already resolved", Assert.Single(closed.DroppedThreads), StringComparison.Ordinal);
     }
 
     [Theory]

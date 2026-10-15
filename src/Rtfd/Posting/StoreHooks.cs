@@ -30,6 +30,12 @@ public sealed class StoreHooks(StateStore store, RepoConfig repo, TimeProvider c
             return Task.FromResult(new RunGate($"{short_} is already reviewed{(landed.ReviewUrl is { } url ? $" ({url})" : "")}. One review per head: a new push gets the next one", 0));
         }
 
+        // Reviewed by a run whose posting the store lost, or a push that changed nothing of the author's.
+        if (store.LastReviewed(repo.Name, pullRequest.Number)?.Head == head)
+        {
+            return Task.FromResult(new RunGate($"{short_} is already reviewed. One review per head: a new push gets the next one", 0));
+        }
+
         var attempts = store.Attempts(repo.Name, pullRequest.Number, head);
         if (attempts.Blocked is { } reason)
         {

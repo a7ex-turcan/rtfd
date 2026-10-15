@@ -21,9 +21,21 @@ public sealed record ReviewPlan
 {
     public required string Summary { get; init; }
     public required IReadOnlyList<InlineComment> Inline { get; init; }
+
+    /// <summary>Replies and resolves on rtfd's own threads, each with the reply it posts.</summary>
     public required IReadOnlyList<ThreadAction> Threads { get; init; }
+
     public required VerdictDecision Verdict { get; init; }
     public required IReadOnlyList<Redaction> Redactions { get; init; }
+
+    /// <summary>rtfd's earlier threads still open after this review's resolves: they count in the verdict.</summary>
+    public IReadOnlyList<OwnThread> Carried { get; init; } = [];
+
+    /// <summary>Threads resolved by hand that this summary reports, once (spec decision 37).</summary>
+    public IReadOnlyList<string> Reported { get; init; } = [];
+
+    /// <summary>Thread actions the validator dropped, for the printout.</summary>
+    public IReadOnlyList<string> DroppedThreads { get; init; } = [];
 
     /// <summary>A secret from outside the diff: the post is blocked and the PR is <c>fatal</c> (spec "Validator").</summary>
     public bool Blocked => Redactions.Any(r => !r.InDiff);
@@ -43,6 +55,9 @@ public sealed record ReviewContext
 
     /// <summary>The login the token posts as: an approve or request-changes on your own PR becomes a comment.</summary>
     public required string PostingIdentity { get; init; }
+
+    /// <summary>rtfd's threads from earlier reviews of this PR, open or not.</summary>
+    public IReadOnlyList<OwnThread> OwnThreads { get; init; } = [];
 }
 
 /// <summary>
@@ -61,7 +76,7 @@ public static class ReviewBuilder
         var notes = new List<string>();
 
         AddConfigFindings(context, inline, general, notes);
-        var committed = AddCommittedCredentials(context.Diff, scanner, inline);
+        var committed = AddCommittedCredentials(context.Diff, scanner, inline, context.OwnThreads);
 
         if (context.Diff.IsPartial)
         {
@@ -72,6 +87,25 @@ public static class ReviewBuilder
         if (context.Ci.Summary == CiSummary.Pending)
         {
             notes.Add("CI hadn't finished when I reviewed this.");
+        }
+
+        // Earlier threads: what is still open counts, and a hand resolve is said once (spec decision 3).
+        var blocks = context.Repo.Settings.NotReadyIfOpen;
+        var resolving = validation.Threads.Where(t => t.Action == ThreadActionKind.Resolve).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var carried = context.OwnThreads.Where(t => t.CountsOpen && !resolving.Contains(t.Id)).ToList();
+        if (carried.Where(t => blocks.Contains(t.Severity)).ToList() is { Count: > 0 } stillOpen)
+        {
+            notes.Add($"Still open from {(stillOpen.Select(t => t.PostedOn).Distinct().Count() == 1 ? "my earlier review" : "my earlier reviews")}: {Described(stillOpen)}.");
+        }
+
+        var handResolved = context.OwnThreads
+            .Where(t => t.State == OwnThreadState.ResolvedByHand && !t.HandResolveReported && blocks.Contains(t.Severity) && !resolving.Contains(t.Id))
+            .ToList();
+        if (handResolved.Count > 0)
+        {
+            notes.Add(context.Repo.Settings.HumanResolveCloses
+                ? $"Closed by hand since my last review: {Described(handResolved)}."
+                : $"Resolved by hand, but it still counts here until it's fixed: {Described(handResolved)}.");
         }
 
         var summary = Summary(document.Summary, general, validation.Folded, notes);
@@ -98,7 +132,8 @@ public static class ReviewBuilder
         }
 
         summary = Check(summary, "the summary");
-        inline = [.. inline.Select(c => c with { Body = Check(c.Body, $"{c.Path}:{c.Line}") })];
+        // An anchor never posts, but the store keeps it for the follow-ups: no secret in it either.
+        inline = [.. inline.Select(c => c with { Body = Check(c.Body, $"{c.Path}:{c.Line}"), Anchor = c.Anchor is { } anchor ? scanner.RedactAll(anchor) : null })];
         var threads = validation.Threads.Select(t => t.Reply is null ? t : t with { Reply = Check(t.Reply, $"the reply on thread {t.Id}") }).ToList();
 
         // A Should added by the check above lands in the summary too.
@@ -108,7 +143,8 @@ public static class ReviewBuilder
             summary = string.Join("\n\n", [summary, .. lateShoulds.Select(g => g.Body)]);
         }
 
-        var severities = inline.Select(c => c.Severity).Concat(general.Select(g => g.Severity)).Concat(validation.Folded.Select(f => f.Severity));
+        var severities = inline.Select(c => c.Severity).Concat(general.Select(g => g.Severity)).Concat(validation.Folded.Select(f => f.Severity))
+            .Concat(carried.Select(t => t.Severity));
         var verdict = Decide(severities, context.Diff.IsPartial, context.Repo, context.PullRequest.Author, context.PostingIdentity);
         return new ReviewPlan
         {
@@ -118,12 +154,15 @@ public static class ReviewBuilder
             Threads = threads,
             Verdict = verdict,
             Redactions = redactions,
+            Carried = carried,
+            Reported = [.. handResolved.Select(t => t.Id)],
+            DroppedThreads = validation.DroppedThreads,
         };
     }
 
     /// <summary>
-    /// Open Shoulds (this run's; Phase 4 adds earlier unresolved ones) mean not ready, and a
-    /// partial review is never ready. The verdict maps to an event, filtered by
+    /// Open Shoulds (this run's, and rtfd's earlier threads still unresolved after this run's
+    /// resolves) mean not ready, and a partial review is never ready. The verdict maps to an event, filtered by
     /// <c>verdicts:</c> and by the self-review check, falling back to a comment.
     /// </summary>
     public static VerdictDecision Decide(IEnumerable<FindingSeverity> open, bool partial, RepoConfig repo, string author, string postingIdentity)
@@ -176,8 +215,10 @@ public static class ReviewBuilder
             {
                 // Always a Should (spec decision 29): it runs on the machine of anyone who opens the repo with that agent.
                 var body = $"Should: this {verb} agent configuration that can run code (`{change.Path}`): hooks, tools, permissions or MCP servers apply to anyone who opens the repo with that agent. It needs its own careful review.";
-                // The agent raised it already: one Should on the file is the guarantee, two is noise.
-                if (inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == change.Path))
+                // The agent raised it already, now or in an earlier review, or rtfd did: one Should
+                // on the file is the guarantee, two is noise.
+                if (inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == change.Path)
+                    || context.OwnThreads.Any(t => t.Body == body || (t.CountsOpen && t.Severity == FindingSeverity.Should && t.Path == change.Path)))
                 {
                     continue;
                 }
@@ -202,9 +243,10 @@ public static class ReviewBuilder
 
     /// <summary>
     /// A credential on an added line gets a Should on that line: rtfd's own, unless the agent
-    /// already put one there. The secret is redacted either way.
+    /// already put one there, or an earlier review's thread says it already. The secret is
+    /// redacted either way.
     /// </summary>
-    private static HashSet<string> AddCommittedCredentials(DiffModel diff, SecretScanner scanner, List<InlineComment> inline)
+    private static HashSet<string> AddCommittedCredentials(DiffModel diff, SecretScanner scanner, List<InlineComment> inline, IReadOnlyList<OwnThread> own)
     {
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in diff.Files)
@@ -213,10 +255,12 @@ public static class ReviewBuilder
             {
                 foreach (var match in scanner.Scan(line.Text, file.Path))
                 {
-                    var raised = inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == file.Path && c.Line == line.NewLine);
+                    var body = CredentialBody(match.Secret);
+                    var raised = inline.Any(c => !c.ByRtfd && c.Severity == FindingSeverity.Should && c.Path == file.Path && c.Line == line.NewLine)
+                        || own.Any(t => t.Body == body || (t.CountsOpen && t.Severity == FindingSeverity.Should && t.Path == file.Path && t.Line == line.NewLine));
                     if (found.Add(match.Secret) && !raised)
                     {
-                        inline.Add(new InlineComment(FindingSeverity.Should, file.Path, line.NewLine!.Value, DiffSide.New, CredentialBody(match.Secret), ByRtfd: true));
+                        inline.Add(new InlineComment(FindingSeverity.Should, file.Path, line.NewLine!.Value, DiffSide.New, body, ByRtfd: true));
                     }
                 }
             }
@@ -278,6 +322,17 @@ public static class ReviewBuilder
     };
 
     private static string Counted(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
+
+    /// <summary>"1 Should (`src/a.py:6`)", by severity, with up to five places each.</summary>
+    private static string Described(IReadOnlyList<OwnThread> threads) => string.Join(" and ", threads
+        .GroupBy(t => t.Severity)
+        .OrderBy(g => g.Key)
+        .Select(g =>
+        {
+            var places = g.Select(t => $"`{t.Where}`").ToList();
+            var listed = places.Count <= 5 ? string.Join(", ", places) : $"{string.Join(", ", places.Take(5))} and {places.Count - 5} more";
+            return $"{Counted(g.Count(), Name(g.Key))} ({listed})";
+        }));
 
     private static string Listed(List<string> paths) =>
         paths.Count <= 5 ? string.Join(", ", paths.Select(p => $"`{p}`")) : $"{string.Join(", ", paths.Take(5).Select(p => $"`{p}`"))} and {paths.Count - 5} more";

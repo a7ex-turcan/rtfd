@@ -1,0 +1,44 @@
+[
+  {
+    "id": 4260939504,
+    "pull_request_review_id": 5506379986,
+    "in_reply_to_id": null,
+    "path": "tally/counter.py",
+    "line": 26,
+    "original_line": 26,
+    "side": "RIGHT",
+    "body": "Should: this raises a bare `KeyError` for a key that was never added. It also lets a count drop to 0 and then go negative. Zero or negative entries then show up in `most_common()` and lower `total()`. Following the repo rule of raising `ValueError` for bad input, something like: `current = self._counts.get(key, 0)`; `if current == 0: raise ValueError(f\"{key!r} has no count to remove\")`; then delete the key when it reaches 0, otherwise decrement it.",
+    "created_at": "2026-10-13T15:56:24Z",
+    "user": {
+      "login": "a7ex-turcan"
+    }
+  },
+  {
+    "id": 4260939511,
+    "pull_request_review_id": 5506379986,
+    "in_reply_to_id": null,
+    "path": "tally/settings.py",
+    "line": 4,
+    "original_line": 4,
+    "side": "RIGHT",
+    "body": "Could: nothing in the package reads `tally/settings.py`, so the \"report publisher\" in the description doesn't exist yet. Either add it in the same PR or leave the settings out until something uses them.",
+    "created_at": "2026-10-13T15:56:24Z",
+    "user": {
+      "login": "a7ex-turcan"
+    }
+  },
+  {
+    "id": 4280645531,
+    "pull_request_review_id": 5530112914,
+    "in_reply_to_id": 4260939511,
+    "path": "tally/settings.py",
+    "line": 4,
+    "original_line": 4,
+    "side": "RIGHT",
+    "body": "MINOR: rtfd's live check of the replies endpoint (Phase 4).",
+    "created_at": "2026-10-15T08:17:49Z",
+    "user": {
+      "login": "a7ex-turcan"
+    }
+  }
+]

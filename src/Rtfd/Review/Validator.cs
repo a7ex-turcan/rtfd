@@ -7,7 +7,8 @@ namespace Rtfd.Review;
 /// <summary>An inline comment that will post on a line inside a hunk.</summary>
 /// <param name="ClaimedLine">The line the agent gave, when the anchor moved it.</param>
 /// <param name="ByRtfd">rtfd's own finding (agent config, a committed credential), not the agent's.</param>
-public sealed record InlineComment(FindingSeverity Severity, string Path, int Line, DiffSide Side, string Body, int? ClaimedLine = null, bool ByRtfd = false);
+/// <param name="Anchor">The code it refers to, which the thread keeps for the follow-ups.</param>
+public sealed record InlineComment(FindingSeverity Severity, string Path, int Line, DiffSide Side, string Body, int? ClaimedLine = null, bool ByRtfd = false, string? Anchor = null);
 
 /// <summary>A finding on the whole PR, posted in the review body.</summary>
 public sealed record GeneralComment(FindingSeverity Severity, string Body, bool ByRtfd = false);
@@ -15,11 +16,15 @@ public sealed record GeneralComment(FindingSeverity Severity, string Body, bool 
 /// <summary>A finding whose anchor is outside the diff: folded into the summary, not dropped (spec "Findings contract").</summary>
 public sealed record FoldedFinding(FindingSeverity Severity, string Path, int Line, string Body);
 
+/// <param name="Threads">The thread actions that will post: on rtfd's own threads that are still open, a resolve always with its reply.</param>
 public sealed record ValidationResult(
     IReadOnlyList<InlineComment> Inline, IReadOnlyList<GeneralComment> General, IReadOnlyList<FoldedFinding> Folded,
     IReadOnlyList<ThreadAction> Threads, IReadOnlyList<string> Errors)
 {
     public bool IsValid => Errors.Count == 0;
+
+    /// <summary>Actions on rtfd's own threads that are already closed: dropped, not an error (plan Phase 4).</summary>
+    public IReadOnlyList<string> DroppedThreads { get; init; } = [];
 }
 
 /// <summary>
@@ -32,10 +37,13 @@ public sealed record ValidationResult(
 /// </summary>
 public static class Validator
 {
+    /// <summary>The reply a resolve posts when the agent gave none: the convention's words.</summary>
+    public const string ResolveReply = "Looks good now.";
+
     /// <param name="readFile">A file's text on one side, or null when that side has no such file.</param>
-    /// <param name="ownThreads">The ids of rtfd's own open threads; nothing else may be resolved or replied to.</param>
+    /// <param name="ownThreads">rtfd's own threads on the PR; no other thread may be resolved or replied to (CLAUDE.md rule 3).</param>
     public static async Task<ValidationResult> ValidateAsync(
-        FindingsDocument document, DiffModel diff, Func<DiffSide, string, Task<string?>> readFile, IReadOnlySet<string> ownThreads)
+        FindingsDocument document, DiffModel diff, Func<DiffSide, string, Task<string?>> readFile, IReadOnlyList<OwnThread> ownThreads)
     {
         var inline = new List<InlineComment>();
         var general = new List<GeneralComment>();
@@ -75,7 +83,7 @@ public static class Validator
 
             if (file is not null && file.IsInHunk(finding.Side, line))
             {
-                inline.Add(new InlineComment(finding.Severity, path, line, finding.Side, body, finding.Line is { } claimed && claimed != line ? claimed : null));
+                inline.Add(new InlineComment(finding.Severity, path, line, finding.Side, body, finding.Line is { } claimed && claimed != line ? claimed : null, Anchor: finding.Anchor));
             }
             else
             {
@@ -83,15 +91,36 @@ public static class Validator
             }
         }
 
+        var actions = new List<ThreadAction>();
+        var dropped = new List<string>();
+        var named = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < document.Threads.Count; i++)
         {
-            if (!ownThreads.Contains(document.Threads[i].Id))
+            var action = document.Threads[i];
+            var thread = ownThreads.FirstOrDefault(t => t.Id == action.Id);
+            if (thread is null)
             {
-                errors.Add($"threads[{i}]: {Shorten(document.Threads[i].Id)} isn't one of your threads. You may only resolve or reply to threads listed under own in inputs/threads.json.");
+                errors.Add($"threads[{i}]: {Shorten(action.Id)} isn't one of your threads. You may only resolve or reply to threads listed under own in inputs/threads.json.");
+                continue;
             }
+
+            if (!named.Add(action.Id))
+            {
+                errors.Add($"threads[{i}]: thread {action.Id} is named twice; give each thread one action");
+                continue;
+            }
+
+            if (!thread.CountsOpen)
+            {
+                // Resolved since the agent's inputs were written, or by hand: stirring it helps nobody.
+                dropped.Add($"thread {action.Id} ({thread.Where}) is already resolved, so its {action.Action.ToString().ToLowerInvariant()} was dropped");
+                continue;
+            }
+
+            actions.Add(action.Action == ThreadActionKind.Resolve && string.IsNullOrWhiteSpace(action.Reply) ? action with { Reply = ResolveReply } : action);
         }
 
-        return new ValidationResult(inline, general, folded, document.Threads, errors);
+        return new ValidationResult(inline, general, folded, actions, errors) { DroppedThreads = dropped };
     }
 
     /// <summary>

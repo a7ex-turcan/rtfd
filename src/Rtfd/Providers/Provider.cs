@@ -59,7 +59,14 @@ public sealed record ReviewThread
     public required bool IsOutdated { get; init; }
     public string? ResolvedBy { get; init; }
     public string? Path { get; init; }
+
+    /// <summary>The line at the PR head now; null once the code under it changed (outdated).</summary>
     public int? Line { get; init; }
+
+    /// <summary>The line it was posted on, at the commit it was posted on.</summary>
+    public int? OriginalLine { get; init; }
+
+    /// <summary>Oldest first: the comment that starts the thread, then the replies.</summary>
     public required IReadOnlyList<ThreadComment> Comments { get; init; }
 }
 
@@ -73,6 +80,13 @@ public sealed record ReviewPostComment(string Path, int Line, DiffSide Side, str
 public sealed record ReviewPost(int Number, string CommitId, Verdict Event, string Body, IReadOnlyList<ReviewPostComment> Comments);
 
 public sealed record PostedComment(string Id, string Path, int? Line, string Body);
+
+/// <summary>A review comment as the provider lists it: an inline comment that starts a thread, or a reply on one.</summary>
+/// <param name="ReviewId">The review it belongs to. On GitHub every reply gets an empty review of its own.</param>
+/// <param name="InReplyTo">The comment that starts its thread, for a reply.</param>
+/// <param name="OriginalLine">The line it was posted on, at the commit it was posted on.</param>
+public sealed record ReviewComment(
+    string Id, string Author, string? ReviewId, string? InReplyTo, string Path, int? Line, int? OriginalLine, string Body, DateTimeOffset? CreatedAt);
 
 /// <summary>A review as the provider has it.</summary>
 /// <param name="State">GitHub's: COMMENTED, APPROVED, CHANGES_REQUESTED, PENDING, DISMISSED.</param>
@@ -93,7 +107,7 @@ public sealed class ProviderException(string message, int? status = null) : Exce
     public bool MayHaveLanded { get; init; }
 }
 
-/// <summary>The read side of a provider adapter (spec "Provider adapter"). Posting arrives in Phase 3.</summary>
+/// <summary>A provider adapter (spec "Provider adapter"): GitHub today.</summary>
 public interface IProvider
 {
     /// <summary>The login the token posts as: the self-review check and recognising rtfd's own threads.</summary>
@@ -123,4 +137,13 @@ public interface IProvider
 
     /// <summary>Every review on the PR, without their comments: for matching a write-ahead record after a crash.</summary>
     Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default);
+
+    /// <summary>Every review comment on the PR, replies included, with its review and line: for rebuilding a lost store.</summary>
+    Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default);
+
+    /// <summary>A reply on the thread <paramref name="commentId"/> starts. Not retried on a 5xx or a network error, like a review.</summary>
+    Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default);
+
+    /// <summary>Marks a review thread resolved. Resolving one that is already resolved changes nothing.</summary>
+    Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default);
 }

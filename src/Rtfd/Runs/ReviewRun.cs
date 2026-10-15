@@ -2,6 +2,7 @@ using Rtfd.Agents;
 using Rtfd.Config;
 using Rtfd.Git;
 using Rtfd.GitTools;
+using Rtfd.Posting;
 using Rtfd.Processes;
 using Rtfd.Providers;
 using Rtfd.Review;
@@ -37,6 +38,9 @@ public sealed record RunRequest
 
     /// <summary>The state store's say in a live run: whether this head may be reviewed, and each attempt counted.</summary>
     public IRunHooks? Hooks { get; init; }
+
+    /// <summary>What rtfd reviewed on the PR before, for a follow-up (plan Phase 4). Without it every review is a first one.</summary>
+    public IReviewHistory? History { get; init; }
 }
 
 /// <param name="Refusal">Why the head isn't reviewed (already reviewed, attempts used up, blocked), or null.</param>
@@ -67,6 +71,19 @@ public sealed record RunReport
     public CiState? Ci { get; set; }
     public ConfigReset? ConfigReset { get; set; }
     public IReadOnlyList<ReviewThread> Threads { get; set; } = [];
+
+    /// <summary>What rtfd reviewed on the PR before, when the run had a history to ask.</summary>
+    public PriorReview? Prior { get; set; }
+
+    /// <summary>rtfd's threads from earlier reviews, joined with the provider's.</summary>
+    public IReadOnlyList<OwnThread> OwnThreads { get; set; } = [];
+
+    /// <summary>Set on a follow-up: the last reviewed head, and the interdiff or why there is none.</summary>
+    public FollowUpPass? FollowUp { get; set; }
+
+    /// <summary>Set when the author changed nothing since the last review, so there is nothing to review.</summary>
+    public string? Unchanged { get; set; }
+
     public string? PostingIdentity { get; set; }
     public string? PromptHash { get; set; }
     public RunFolder? RunFolder { get; set; }
@@ -79,11 +96,12 @@ public sealed record RunReport
 }
 
 /// <summary>
-/// One review of one PR head, end to end (spec "Run manager"; plan Phase 1): the provider's
-/// read side, the mirror, the diff model, the worktree with its agent configuration reset, the
-/// run folder, the agent with retries, the validator, rtfd's own findings, the secret check and
-/// the verdict. Nothing posts yet. The run folder and the worktree go when it ends, timeout
-/// kills included, unless <see cref="RunRequest.Keep"/>.
+/// One review of one PR head, end to end (spec "Run manager"; plan Phases 1 and 4): the
+/// provider's read side, the mirror, the diff model, what rtfd reviewed before and the interdiff,
+/// the worktree with its agent configuration reset, the run folder, the agent with retries, the
+/// validator, rtfd's own findings, the secret check and the verdict. Posting is the caller's. The
+/// run folder and the worktree go when it ends, timeout kills included, unless
+/// <see cref="RunRequest.Keep"/>.
 /// </summary>
 public static class ReviewRun
 {
@@ -152,6 +170,19 @@ public static class ReviewRun
                 return report;
             }
 
+            // What rtfd reviewed before: its threads, and on a new head the interdiff (plan Phase 4).
+            if (request.History is { } history)
+            {
+                var prior = report.Prior = await history.LoadAsync(repo, pr.Number, report.PostingIdentity, provider, report.Threads, cancellationToken).ConfigureAwait(false);
+                report.OwnThreads = OwnThreads.Join(prior.Threads, report.Threads, report.PostingIdentity, repo);
+                if (prior.Last is { } last && last.Head != commits.Head)
+                {
+                    log.WriteLine($"Following up on the review of {last.Head[..8]}...");
+                    var pass = await Interdiff.BuildAsync(git, mirror, provider.FetchSource(pr), pr.Number, last.Head, last.MergeBase, commits, cancellationToken).ConfigureAwait(false);
+                    report.FollowUp = pass.Interdiff is { } interdiff ? pass with { Interdiff = interdiff.Apply(repo.Settings.Exclude, repo.Settings.MaxDiffLines) } : pass;
+                }
+            }
+
             var promptFile = ReadPrompt(repo);
             if (promptFile is null)
             {
@@ -171,6 +202,15 @@ public static class ReviewRun
                 }
 
                 attempts = gate.Attempts;
+
+                // Kept in the mirror, so the next follow-up's interdiff can start here even after a force-push.
+                await mirror.KeepAsync(pr.Number, commits.Head, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (report.FollowUp is { Unchanged: true } unchanged)
+            {
+                report.Unchanged = $"since the last review, of {unchanged.LastHead[..8]}, the author changed nothing; only the base branch moved";
+                return report;
             }
 
             var run = report.RunFolder = RunFolder.Create(request.Config.Data, repo.Name, pr.Number, commits.Head);
@@ -180,14 +220,20 @@ public static class ReviewRun
                 worktree = await Worktree.CreateAsync(git, mirror, run.WorktreePath, commits.Head, cancellationToken).ConfigureAwait(false);
                 report.ConfigReset = await worktree.ResetAgentConfigAsync(agent.ProjectConfig, commits.BaseTip, commits.Head, diff, cancellationToken).ConfigureAwait(false);
 
-                run.WriteInputs(pr, commits, diff, report.Ci);
-                new GitToolsBinding(mirror.Path, worktree.Path, commits.Head, commits.MergeBase, null, request.Config.Data.GitDirectory).Write(run.Path);
+                run.WriteInputs(pr, commits, diff, report.Ci, report.OwnThreads, report.FollowUp);
+
+                // rtfd-git may name the last reviewed head and its commits too, once the mirror has them.
+                var follow = report.FollowUp is { LastMergeBase: not null } f ? f : null;
+                new GitToolsBinding(mirror.Path, worktree.Path, commits.Head, commits.MergeBase, follow?.LastHead, request.Config.Data.GitDirectory)
+                {
+                    LastMergeBase = follow?.LastMergeBase,
+                }.Write(run.Path);
                 File.WriteAllText(run.SettingsPath, ClaudeAdapter.Settings());
                 File.WriteAllText(run.McpConfigPath, ClaudeAdapter.McpConfig(request.RtfdExecutable, run.Path));
 
                 if (request.InputsOnly)
                 {
-                    File.WriteAllText(run.PromptPath, PromptRenderer.Render(promptFile, run, diff));
+                    File.WriteAllText(run.PromptPath, PromptRenderer.Render(promptFile, run, diff, report.FollowUp, report.OwnThreads));
                     return report;
                 }
 
@@ -254,6 +300,7 @@ public static class ReviewRun
             ConfigReset = report.ConfigReset!,
             Repo = repo,
             PostingIdentity = report.PostingIdentity!,
+            OwnThreads = report.OwnThreads,
         };
 
         async Task<string?> ReadFile(DiffSide side, string path)
@@ -280,7 +327,7 @@ public static class ReviewRun
         IReadOnlyList<string>? rejection = null;
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            var prompt = PromptRenderer.Render(promptFile, run, diff, rejection);
+            var prompt = PromptRenderer.Render(promptFile, run, diff, report.FollowUp, report.OwnThreads, rejection);
             File.WriteAllText(run.PromptPath, prompt);
             request.Log.WriteLine($"Attempt {attempt} of {attempts}: running {agent.Name}...");
 
@@ -317,7 +364,7 @@ public static class ReviewRun
                 document = parsed.Document;
                 if (document is not null)
                 {
-                    validation = await Validator.ValidateAsync(document, diff, ReadFile, new HashSet<string>()).ConfigureAwait(false);
+                    validation = await Validator.ValidateAsync(document, diff, ReadFile, report.OwnThreads).ConfigureAwait(false);
                     errors.AddRange(validation.Errors);
                 }
             }
@@ -360,13 +407,5 @@ public static class ReviewRun
     }
 
     /// <summary>The agent's raw answer, safe to print: every secret the scanner finds is redacted.</summary>
-    private static string Redacted(string text, SecretScanner scanner)
-    {
-        foreach (var match in scanner.Scan(text))
-        {
-            text = text.Replace(match.Secret, SecretScanner.Redact(match.Secret), StringComparison.Ordinal);
-        }
-
-        return text;
-    }
+    private static string Redacted(string text, SecretScanner scanner) => scanner.RedactAll(text);
 }

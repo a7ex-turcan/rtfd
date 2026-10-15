@@ -7,8 +7,8 @@ using Rtfd.Tests.Support;
 namespace Rtfd.Tests;
 
 /// <summary>
-/// The GitHub read side against recorded responses (Recordings/github: real answers from the
-/// public nutrx and rtfd repos, trimmed to the fields rtfd reads).
+/// The GitHub provider against recorded responses (Recordings/github: real answers from the
+/// public nutrx and rtfd repos and from the sandbox, trimmed to the fields rtfd reads).
 /// </summary>
 public sealed class GitHubProviderTests
 {
@@ -143,6 +143,62 @@ public sealed class GitHubProviderTests
         Assert.StartsWith("Could:", first.Comments[0].Body, StringComparison.Ordinal);
         Assert.Equal(87, threads[1].Line);
         Assert.Contains("\"number\":36", handler.Requests.Single().Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_PR_s_review_comments_come_with_their_review_line_and_reply_target()
+    {
+        var (provider, handler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
+        handler.On("/repos/a7ex-turcan/rtfd-sandbox/pulls/1/comments?per_page=100", HttpStatusCode.OK, Recording("pull-comments.json"));
+
+        var comments = await provider.ListReviewCommentsAsync(1, TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, comments.Count);
+        var root = comments[0];
+        Assert.Equal(("4260939504", "5506379986", null, 26, 26), (root.Id, root.ReviewId, root.InReplyTo, root.Line, root.OriginalLine));
+        Assert.StartsWith("Should:", root.Body, StringComparison.Ordinal);
+        Assert.Equal("4260939511", comments[2].InReplyTo);
+        Assert.Equal("a7ex-turcan", comments[2].Author);
+    }
+
+    [Fact]
+    public async Task A_reply_goes_to_the_thread_s_first_comment_and_isn_t_retried_after_a_502()
+    {
+        var (provider, handler, _, waits) = Create("a7ex-turcan/rtfd-sandbox");
+        const string path = "/repos/a7ex-turcan/rtfd-sandbox/pulls/1/comments/4260939511/replies";
+        handler.On(path, HttpStatusCode.Created, Recording("reply.json"));
+
+        var reply = await provider.ReplyAsync(1, "4260939511", "MINOR: rtfd's live check of the replies endpoint (Phase 4).", TestContext.Current.CancellationToken);
+
+        Assert.Equal(("4280645531", "4260939511"), (reply.Id, reply.InReplyTo));
+        var sent = System.Text.Json.Nodes.JsonNode.Parse(handler.Requests.Single().Body!)!.AsObject();
+        Assert.Equal(["body"], sent.Select(p => p.Key));
+        Assert.Equal("MINOR: rtfd's live check of the replies endpoint (Phase 4).", sent["body"]!.GetValue<string>());
+
+        var (failing, failingHandler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
+        failingHandler.On(path, HttpStatusCode.BadGateway, "{}");
+        var error = await Assert.ThrowsAsync<ProviderException>(() => failing.ReplyAsync(1, "4260939511", "x", TestContext.Current.CancellationToken));
+        Assert.True(error.MayHaveLanded);
+        Assert.Single(failingHandler.Requests);
+        Assert.Empty(waits);
+    }
+
+    [Fact]
+    public async Task A_resolve_is_a_GraphQL_mutation_and_a_thread_that_isn_t_there_is_an_error()
+    {
+        var (provider, handler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
+        handler.On("/graphql", HttpStatusCode.OK, Recording("resolve.json"));
+
+        await provider.ResolveThreadAsync("PRRT_kwDOVHP2386r8isI", TestContext.Current.CancellationToken);
+
+        var body = handler.Requests.Single().Body!;
+        Assert.Contains("resolveReviewThread(input: {threadId: $id})", body, StringComparison.Ordinal);
+        Assert.Contains("\"variables\":{\"id\":\"PRRT_kwDOVHP2386r8isI\"}", body, StringComparison.Ordinal);
+
+        var (missing, missingHandler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
+        missingHandler.On("/graphql", HttpStatusCode.OK, Recording("resolve-not-found.json"));
+        var error = await Assert.ThrowsAsync<ProviderException>(() => missing.ResolveThreadAsync("PRRT_doesnotexist", TestContext.Current.CancellationToken));
+        Assert.Contains("Could not resolve to a node", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

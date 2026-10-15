@@ -8,10 +8,11 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 [rtfq](https://github.com/a7ex-turcan/rtfq) (databases) and
 [rtfc](https://github.com/a7ex-turcan/rtfc) (relay between sessions).
 
-**Status: early. It reviews and posts, one PR at a time.** `rtfd run <repo> --pr <n>` reviews a
-GitHub PR with Claude Code and posts the review once, crash-safe, then reads it back; `--dry-run`
-prints it instead. `rtfd validate` checks the config, the tokens and exactly what the agent loads.
-Watching PRs on its own (`serve`) and follow-up reviews come next. The design is
+**Status: early. It reviews, posts and follows up, one PR at a time.** `rtfd run <repo> --pr <n>`
+reviews a GitHub PR with Claude Code and posts the review once, crash-safe, then reads it back;
+`--dry-run` prints it instead. Run it again after a push and it reviews only what changed, and
+resolves its own threads the author fixed. `rtfd validate` checks the config, the tokens and
+exactly what the agent loads. Watching PRs on its own (`serve`) comes next. The design is
 [`docs/spec.md`](docs/spec.md) and the build order is [`docs/plan.md`](docs/plan.md).
 
 ---
@@ -188,7 +189,35 @@ Read back from GitHub: the summary, the event and every inline comment are there
   requests changes on a PR the token's own account wrote: GitHub forbids it, so rtfd downgrades it
   to a comment and says so.
 
-### 6. Make the reviews yours
+### 6. Follow up after a push
+
+When the author pushes fixes, run the same command again. It's a follow-up now:
+
+```text
+  Follow-up on 34823a2e8e25: the interdiff has 2 file(s) (+8 -1)
+...
+--- thread 4280907838 (tally/counter.py:31, Should): resolve ---
+Looks good now.
+
+Posted the review as COMMENT, with 0 inline comments, and 1 reply on earlier threads (1 resolved).
+```
+
+- **Only what changed.** The agent reviews the interdiff: what the author changed since the last
+  review, without anything that came in from merging the base branch, with the full diff as
+  context. A rebased PR gets an interdiff too, from the head rtfd kept in its mirror. A push that
+  only merges the base branch isn't reviewed at all. When the changes can't be told apart from the
+  base branch's, the whole PR is reviewed again.
+- **Its own threads.** rtfd replies "Looks good now." on each of its threads that is fixed and
+  resolves it, and leaves the rest alone. It never touches a thread someone else started.
+- **What's still open counts.** "Not ready: 1 Should open." counts this review's findings and
+  rtfd's earlier threads that are still unresolved, and the summary says which.
+- **Resolved by hand.** A Should someone resolves without rtfd counts as closed, and the next
+  summary says so, once. Set `human_resolve_closes: false` to keep such a thread counting until rtfd
+  resolves it.
+- **A lost `state.db`.** rtfd rebuilds what it needs from GitHub: every review it posted carries a
+  hidden marker, and every comment leads with its severity.
+
+### 7. Make the reviews yours
 
 `prompts/review.md` is the reviewer's brief: what to look at, how severe is severe, and how to
 write. rtfd re-reads it on every run, so edit it and run the same PR again until the review reads
@@ -202,9 +231,9 @@ points elsewhere.
 
 | Folder | What |
 |---|---|
-| `mirrors/` | A bare git mirror per repo, fetched into on every run |
+| `mirrors/` | A bare git mirror per repo, fetched into on every run. Every head rtfd reviewed stays in it, so follow-ups work after a force-push |
 | `runs/`, `worktrees/` | One run's working folder and checkout. Deleted when the run ends, unless `--keep` |
-| `state.db` | What rtfd posted, with the hash of every body, and the attempts used per head |
+| `state.db` | What rtfd posted, with the hash of every body; its threads and their severities; the attempts used per head |
 | `git/` | An empty git config and hooks folder, so your own git setup never applies |
 
 ### When something goes wrong
@@ -293,7 +322,7 @@ each one is in the spec.
 | Command | What it does | |
 |---|---|---|
 | `rtfd validate` | Checks the config, the tokens and the agents, and prints each agent's tools | Built |
-| `rtfd run <repo> --pr 12` | One review now, posted once and read back; `--dry-run` prints it instead | Built |
+| `rtfd run <repo> --pr 12` | One review now, posted once and read back; a follow-up when rtfd reviewed the PR before. `--dry-run` prints it instead | Built |
 | `rtfd retry <repo> --pr 12` | Gives a PR its attempts back, or lifts a secret block | Built |
 | `rtfd serve` | One long-running process for every configured repo | Phase 5 |
 | `rtfd status` | Per repo: alive, last poll, open PRs, last review, attempts left. Per agent account: paused until | Phase 5 |

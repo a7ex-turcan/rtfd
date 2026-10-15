@@ -5,12 +5,41 @@ namespace Rtfd.State;
 
 public sealed record AttemptState(int Used, string? Blocked);
 
-/// <param name="Severity">For inline comments, the finding's severity, which Phase 4 needs for rtfd's threads.</param>
-public sealed record PostedBody(int Ordinal, string? Path, int? Line, string? Side, string? Severity, string Body, string BodyHash, string? CommentId);
+/// <summary>One body of a posting: the summary (ordinal 0), an inline comment, or a reply on one of rtfd's threads.</summary>
+/// <param name="Severity">For inline comments, the finding's severity: the thread keeps it.</param>
+public sealed record PostedBody(int Ordinal, string? Path, int? Line, string? Side, string? Severity, string Body, string BodyHash, string? CommentId)
+{
+    /// <summary>An inline comment's anchor, which a follow-up passes back to the agent.</summary>
+    public string? Anchor { get; init; }
 
+    /// <summary>A reply: the comment that starts the thread it goes on.</summary>
+    public string? ReplyTo { get; init; }
+
+    /// <summary>A reply: <c>reply</c>, or <c>resolve</c> when the thread is resolved after it.</summary>
+    public string? Action { get; init; }
+
+    public bool IsInline => Ordinal > 0 && ReplyTo is null;
+    public bool IsReply => ReplyTo is not null;
+}
+
+/// <param name="MergeBase">The head's merge base, where the next follow-up's interdiff starts.</param>
+/// <param name="Reports">The threads whose hand resolve this posting's summary reports.</param>
 public sealed record PostingRow(
-    long Id, long RunId, string Repo, int Pr, string Head, string Identity, string Event, DateTimeOffset StartedAt,
-    string State, string? ReviewId, string? ReviewUrl, string? Message);
+    long Id, long RunId, string Repo, int Pr, string Head, string? MergeBase, string Identity, string Event, DateTimeOffset StartedAt,
+    string State, string? ReviewId, string? ReviewUrl, string? Message, IReadOnlyList<string> Reports);
+
+/// <summary>The last review of a PR: its head, and the merge base the head had then.</summary>
+public sealed record LastReview(string Head, string? MergeBase);
+
+/// <summary>One of rtfd's threads (spec "State store"). Whether it is resolved now is the provider's to say.</summary>
+/// <param name="CommentId">The inline comment that starts it.</param>
+/// <param name="Head">The head it was posted on.</param>
+/// <param name="PostingId">The posting it came from; null when rebuilt from the provider.</param>
+/// <param name="ResolvedByRtfd">When rtfd resolved it, or null.</param>
+/// <param name="HandResolveReported">When a summary that reported its hand resolve landed, or null.</param>
+public sealed record ThreadRow(
+    string CommentId, string Head, string Severity, string Path, int? Line, string? Side, string? Anchor, string Body,
+    long? PostingId, string? ResolvedByRtfd, string? HandResolveReported);
 
 /// <summary>One cleared entry, for what <c>rtfd retry</c> prints.</summary>
 public sealed record ClearedAttempts(string Head, int Used, string? Blocked);
@@ -22,7 +51,7 @@ public sealed record ClearedAttempts(string Head, int Used, string? Blocked);
 /// </summary>
 public sealed class StateStore : IDisposable
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private static readonly Lazy<string> Schema = new(() =>
     {
@@ -67,12 +96,44 @@ public sealed class StateStore : IDisposable
 
     public int SchemaVersion => int.Parse(Scalar<string>("SELECT value FROM meta WHERE key = 'schema_version'")!, CultureInfo.InvariantCulture);
 
-    /// <summary>Brings an older file up to <see cref="CurrentSchemaVersion"/>; schema.sql creates the current shape for new ones.</summary>
+    /// <summary>
+    /// Brings an older file up to <see cref="CurrentSchemaVersion"/>. schema.sql runs first and
+    /// creates the current shape for a new file and every table that is new, so a step only
+    /// changes what was already there.
+    /// </summary>
     private void Migrate()
     {
-        if (SchemaVersion > CurrentSchemaVersion)
+        var version = SchemaVersion;
+        if (version > CurrentSchemaVersion)
         {
-            throw new InvalidOperationException($"state.db is schema version {SchemaVersion}, newer than this rtfd knows ({CurrentSchemaVersion}). Update rtfd.");
+            throw new InvalidOperationException($"state.db is schema version {version}, newer than this rtfd knows ({CurrentSchemaVersion}). Update rtfd.");
+        }
+
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            if (version < 2)
+            {
+                // v2 (Phase 4, follow-ups): replies in the write-ahead record, the merge base for the
+                // interdiff, and hand-resolve reports. The threads table came with schema.sql.
+                AddColumn("prs", "last_merge_base", "TEXT");
+                AddColumn("postings", "merge_base", "TEXT");
+                AddColumn("postings", "reports", "TEXT");
+                AddColumn("posted_bodies", "anchor", "TEXT");
+                AddColumn("posted_bodies", "reply_to", "TEXT");
+                AddColumn("posted_bodies", "action", "TEXT");
+                Execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+            }
+
+            transaction.Commit();
+        }
+    }
+
+    private void AddColumn(string table, string column, string type)
+    {
+        if (Scalar<long>($"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $column", ("$column", column)) == 0)
+        {
+            Execute($"ALTER TABLE {table} ADD COLUMN {column} {type}");
         }
     }
 
@@ -127,26 +188,31 @@ public sealed class StateStore : IDisposable
     // ---- postings ----
 
     /// <summary>The write-ahead record: the posting and every body, in one transaction, before the post.</summary>
-    public long BeginPosting(long runId, string repo, int pr, string head, string identity, string verdictEvent, DateTimeOffset now, IReadOnlyList<PostedBody> bodies)
+    /// <param name="reports">The threads whose hand resolve the summary reports, marked reported once it lands.</param>
+    public long BeginPosting(
+        long runId, string repo, int pr, string head, string? mergeBase, string identity, string verdictEvent, DateTimeOffset now,
+        IReadOnlyList<PostedBody> bodies, IReadOnlyList<string>? reports = null)
     {
         lock (_lock)
         {
             using var transaction = _connection.BeginTransaction();
             var id = Insert(
                 """
-                INSERT INTO postings (run_id, repo, pr, head, identity, event, started_at, state)
-                VALUES ($run, $repo, $pr, $head, $identity, $event, $at, 'pending')
+                INSERT INTO postings (run_id, repo, pr, head, merge_base, identity, event, started_at, state, reports)
+                VALUES ($run, $repo, $pr, $head, $base, $identity, $event, $at, 'pending', $reports)
                 """,
-                ("$run", runId), ("$repo", repo), ("$pr", pr), ("$head", head), ("$identity", identity), ("$event", verdictEvent), ("$at", Time(now)));
+                ("$run", runId), ("$repo", repo), ("$pr", pr), ("$head", head), ("$base", mergeBase), ("$identity", identity),
+                ("$event", verdictEvent), ("$at", Time(now)), ("$reports", reports is { Count: > 0 } ? string.Join(' ', reports) : null));
             foreach (var body in bodies)
             {
                 Execute(
                     """
-                    INSERT INTO posted_bodies (posting_id, ordinal, path, line, side, severity, body, body_hash)
-                    VALUES ($posting, $ordinal, $path, $line, $side, $severity, $body, $hash)
+                    INSERT INTO posted_bodies (posting_id, ordinal, path, line, side, severity, body, body_hash, anchor, reply_to, action)
+                    VALUES ($posting, $ordinal, $path, $line, $side, $severity, $body, $hash, $anchor, $reply, $action)
                     """,
                     ("$posting", id), ("$ordinal", body.Ordinal), ("$path", body.Path), ("$line", body.Line), ("$side", body.Side),
-                    ("$severity", body.Severity), ("$body", body.Body), ("$hash", body.BodyHash));
+                    ("$severity", body.Severity), ("$body", body.Body), ("$hash", body.BodyHash), ("$anchor", body.Anchor),
+                    ("$reply", body.ReplyTo), ("$action", body.Action));
             }
 
             transaction.Commit();
@@ -178,31 +244,101 @@ public sealed class StateStore : IDisposable
         ReadPosting, ("$repo", repo), ("$pr", pr), ("$head", head));
 
     public IReadOnlyList<PostedBody> Bodies(long postingId) => Query(
-        "SELECT ordinal, path, line, side, severity, body, body_hash, comment_id FROM posted_bodies WHERE posting_id = $posting ORDER BY ordinal",
+        "SELECT ordinal, path, line, side, severity, body, body_hash, comment_id, anchor, reply_to, action FROM posted_bodies WHERE posting_id = $posting ORDER BY ordinal",
         r => new PostedBody((int)r.GetInt64(0), StringOrNull(r, 1), r.IsDBNull(2) ? null : (int)r.GetInt64(2), StringOrNull(r, 3), StringOrNull(r, 4),
-            r.GetString(5), r.GetString(6), StringOrNull(r, 7)),
+            r.GetString(5), r.GetString(6), StringOrNull(r, 7))
+        {
+            Anchor = StringOrNull(r, 8),
+            ReplyTo = StringOrNull(r, 9),
+            Action = StringOrNull(r, 10),
+        },
         ("$posting", postingId));
 
     // ---- prs ----
 
-    public void SetLastReviewedHead(string repo, int pr, string head) => Execute(
-        """
-        INSERT INTO prs (repo, pr, last_reviewed_head) VALUES ($repo, $pr, $head)
-        ON CONFLICT (repo, pr) DO UPDATE SET last_reviewed_head = excluded.last_reviewed_head
-        """,
-        ("$repo", repo), ("$pr", pr), ("$head", head));
+    /// <summary>Whether the store knows this PR at all. One it doesn't is rebuilt from the provider first.</summary>
+    public bool HasRecord(string repo, int pr) => Scalar<long>(
+        "SELECT EXISTS (SELECT 1 FROM prs WHERE repo = $repo AND pr = $pr) OR EXISTS (SELECT 1 FROM postings WHERE repo = $repo AND pr = $pr)",
+        ("$repo", repo), ("$pr", pr)) == 1;
 
-    public string? LastReviewedHead(string repo, int pr) =>
-        Scalar<string>("SELECT last_reviewed_head FROM prs WHERE repo = $repo AND pr = $pr", ("$repo", repo), ("$pr", pr));
+    public void SetLastReviewed(string repo, int pr, string head, string? mergeBase) => Execute(
+        """
+        INSERT INTO prs (repo, pr, last_reviewed_head, last_merge_base) VALUES ($repo, $pr, $head, $base)
+        ON CONFLICT (repo, pr) DO UPDATE SET last_reviewed_head = excluded.last_reviewed_head, last_merge_base = excluded.last_merge_base
+        """,
+        ("$repo", repo), ("$pr", pr), ("$head", head), ("$base", mergeBase));
+
+    public LastReview? LastReviewed(string repo, int pr) => QuerySingle(
+        "SELECT last_reviewed_head, last_merge_base FROM prs WHERE repo = $repo AND pr = $pr AND last_reviewed_head IS NOT NULL",
+        r => new LastReview(r.GetString(0), StringOrNull(r, 1)),
+        ("$repo", repo), ("$pr", pr));
+
+    // ---- threads ----
+
+    /// <summary>Records one of rtfd's threads; one already known is left as it is.</summary>
+    public void AddThread(string repo, int pr, ThreadRow thread) => Execute(
+        """
+        INSERT OR IGNORE INTO threads (repo, pr, comment_id, head, severity, path, line, side, anchor, body, posting_id, resolved_by_rtfd, hand_resolve_reported)
+        VALUES ($repo, $pr, $comment, $head, $severity, $path, $line, $side, $anchor, $body, $posting, $resolved, $reported)
+        """,
+        ("$repo", repo), ("$pr", pr), ("$comment", thread.CommentId), ("$head", thread.Head), ("$severity", thread.Severity), ("$path", thread.Path),
+        ("$line", thread.Line), ("$side", thread.Side), ("$anchor", thread.Anchor), ("$body", thread.Body), ("$posting", thread.PostingId),
+        ("$resolved", thread.ResolvedByRtfd), ("$reported", thread.HandResolveReported));
+
+    public IReadOnlyList<ThreadRow> Threads(string repo, int pr) => Query(
+        """
+        SELECT comment_id, head, severity, path, line, side, anchor, body, posting_id, resolved_by_rtfd, hand_resolve_reported
+        FROM threads WHERE repo = $repo AND pr = $pr ORDER BY rowid
+        """,
+        r => new ThreadRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.IsDBNull(4) ? null : (int)r.GetInt64(4), StringOrNull(r, 5),
+            StringOrNull(r, 6), r.GetString(7), r.IsDBNull(8) ? null : r.GetInt64(8), StringOrNull(r, 9), StringOrNull(r, 10)),
+        ("$repo", repo), ("$pr", pr));
+
+    /// <summary>rtfd resolved the thread, or meant to and found it resolved: it is never a hand resolve.</summary>
+    public void MarkResolved(string repo, int pr, string commentId, DateTimeOffset now) => Execute(
+        "UPDATE threads SET resolved_by_rtfd = COALESCE(resolved_by_rtfd, $at) WHERE repo = $repo AND pr = $pr AND comment_id = $comment",
+        ("$repo", repo), ("$pr", pr), ("$comment", commentId), ("$at", Time(now)));
+
+    /// <summary>A summary that reports these threads' hand resolves landed, so it isn't said again (spec decision 37).</summary>
+    public void MarkReported(string repo, int pr, IEnumerable<string> commentIds, DateTimeOffset now)
+    {
+        foreach (var id in commentIds)
+        {
+            Execute(
+                "UPDATE threads SET hand_resolve_reported = COALESCE(hand_resolve_reported, $at) WHERE repo = $repo AND pr = $pr AND comment_id = $comment",
+                ("$repo", repo), ("$pr", pr), ("$comment", id), ("$at", Time(now)));
+        }
+    }
+
+    /// <summary>What a rebuild from the provider found, in one transaction. The PR is known afterwards, even when nothing was found.</summary>
+    public void Rebuilt(string repo, int pr, LastReview? last, IReadOnlyList<ThreadRow> threads)
+    {
+        lock (_lock)
+        {
+            using var transaction = _connection.BeginTransaction();
+            Execute("INSERT OR IGNORE INTO prs (repo, pr) VALUES ($repo, $pr)", ("$repo", repo), ("$pr", pr));
+            if (last is not null)
+            {
+                SetLastReviewed(repo, pr, last.Head, last.MergeBase);
+            }
+
+            foreach (var thread in threads)
+            {
+                AddThread(repo, pr, thread);
+            }
+
+            transaction.Commit();
+        }
+    }
 
     // ---- plumbing ----
 
-    private const string PostingColumns = "id, run_id, repo, pr, head, identity, event, started_at, state, review_id, review_url, message";
+    private const string PostingColumns = "id, run_id, repo, pr, head, merge_base, identity, event, started_at, state, review_id, review_url, message, reports";
 
     private static PostingRow ReadPosting(SqliteDataReader r) => new(
-        r.GetInt64(0), r.GetInt64(1), r.GetString(2), (int)r.GetInt64(3), r.GetString(4), r.GetString(5), r.GetString(6),
-        DateTimeOffset.Parse(r.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal), r.GetString(8),
-        StringOrNull(r, 9), StringOrNull(r, 10), StringOrNull(r, 11));
+        r.GetInt64(0), r.GetInt64(1), r.GetString(2), (int)r.GetInt64(3), r.GetString(4), StringOrNull(r, 5), r.GetString(6), r.GetString(7),
+        DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal), r.GetString(9),
+        StringOrNull(r, 10), StringOrNull(r, 11), StringOrNull(r, 12), StringOrNull(r, 13)?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? []);
 
     public static string Time(DateTimeOffset value) => value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
 

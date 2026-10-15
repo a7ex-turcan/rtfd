@@ -230,6 +230,12 @@ public sealed class ProviderChecksTests
         public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private static RtfdConfig Config(TempHome home, string authors = "[owner]")
@@ -367,6 +373,12 @@ public sealed class ValidateCommandPhase2Tests : IDisposable
         public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     [Fact]

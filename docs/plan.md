@@ -442,6 +442,11 @@ Thread replies and resolves, follow-ups, the scheduler.
 each fixed thread and resolves it, leaves the rest alone, and the verdict counts everything still
 open.
 
+**Status (2026-10-15): built.** Every exit criterion passed on `a7ex-turcan/rtfd-sandbox#2` with the
+real Claude Code, and locally in `FollowUpTests` and `InterdiffTests`. The interdiff is a three-way
+merge in the mirror rather than a scratch worktree (spec decision 54), reviewed heads are kept
+(decision 53), and a push that changes nothing of the author's isn't reviewed (decision 55).
+
 ### Scope
 
 1. **The thread store.** Every inline comment rtfd posted: thread node id, comment id, severity,
@@ -471,23 +476,24 @@ open.
 
 - ✅ On the sandbox: a PR with two Shoulds; a push fixing one; the follow-up replies "Looks good now."
   on that thread and resolves it, leaves the other alone, stays not ready, and raises new findings
-  only from the interdiff.
+  only from the interdiff. *(PR #2: reviews 5530442433 and 5530450202; a later push's new Should
+  came from the interdiff alone, review 5530476230.)*
 - ✅ Merging the base branch into the PR branch brings none of the base's changes into the interdiff.
+  *(A push that only merged `main` wasn't reviewed; the next interdiff, across the merge, held only
+  the author's fix.)*
 - ✅ Hand-resolving the remaining Should: the next summary mentions it, the one after doesn't.
+  *(Reviews 5530483061 and 5530491505.)*
 - ✅ With `state.db` deleted, the rebuild recovers both threads and their severities, and the next
-  follow-up resolves correctly.
+  follow-up resolves correctly. *(Four threads with their severities; three resolved, review
+  5530465554.)*
 - ✅ `FakeAgent` trying to resolve a thread a person started is refused by the validator.
 
 ### Risks and decisions
 
-- ❓ **Rebases in v0.** The spec puts the rebase and force-push fallback in v1, but without it a
-  rebased nutrx PR is never reviewed again. Recommendation: pull the minimal version in here (not an
-  ancestor, or not fetchable: a full review with the existing threads passed in) and leave the
-  refinements for v1.
-- ❓ **Keep reviewed heads as local refs** in the mirror (`refs/rtfd/reviewed/<pr>/<sha>`), so a
-  force-push upstream can't garbage-collect them. Then "can't be fetched" stops happening, and since
-  the interdiff doesn't need the old head to be an ancestor, a rebase could get an interdiff instead
-  of a full review. That changes decisions 17 and 25, so it's the owner's call.
+- ✔ **Rebases in v0, and reviewed heads kept as local refs** (the owner, 2026-10-15). Every head a
+  live run reviews stays in the mirror as `refs/rtfd/reviewed/<pr>/<sha>`, and a rebased PR gets an
+  interdiff from it. A full review is left for an apply that conflicts or a head that can't be found
+  (spec decision 53, replacing 17 and 25).
 - ⚠ The spec's "closed by hand without a change": rtfd can't easily tell whether the code under a
   thread changed. v0 says "closed by hand".
 

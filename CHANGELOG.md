@@ -45,3 +45,13 @@ Nothing released yet. The design is in `docs/spec.md` and the build order in `do
   folder.
 - Each head gets `max_attempts` agent runs. `rtfd retry <repo> --pr <n>` gives them back, and lifts
   the block on a head whose review held a secret that wasn't in the diff.
+- Follow-ups. On a PR rtfd reviewed before, `rtfd run` reviews only what the author changed since
+  the last review (the interdiff, without changes merged in from the base branch, even after a
+  rebase), replies "Looks good now." on its own threads that are fixed and resolves them, and leaves
+  the rest alone. The verdict counts rtfd's earlier threads that are still open. A push that only
+  merges the base branch isn't reviewed.
+- A Should resolved by hand counts as closed and is reported once in the next summary;
+  `human_resolve_closes: false` keeps it counting until rtfd resolves it.
+- A lost `state.db` is rebuilt from the hidden markers in rtfd's reviews on GitHub, so a lost store
+  neither loses rtfd's threads nor posts a second review of a head.
+- The hidden marker in each review now names the head's merge base too.

@@ -1,18 +1,25 @@
 using System.Security.Cryptography;
 using System.Text;
 using Rtfd.Git;
+using Rtfd.Review;
 
 namespace Rtfd.Runs;
 
 /// <summary>
 /// The prompt an agent gets: the repo's prompt file (the job, the conventions, the tone, which
 /// the owner edits and rtfd re-reads every run), then rtfd's part, which the owner doesn't edit:
-/// where this run's inputs are and the findings contract. Keeping the contract in the binary
-/// means a prompt edit can't break it and it always matches the version that validates it.
+/// where this run's inputs are, what a follow-up asks, and the findings contract. Keeping the
+/// contract in the binary means a prompt edit can't break it and it always matches the version
+/// that validates it.
 /// </summary>
 public static class PromptRenderer
 {
-    public static string Render(string promptFile, RunFolder run, DiffModel diff, IReadOnlyList<string>? rejection = null)
+    /// <param name="followUp">On a follow-up: the last reviewed head and the interdiff, or why the whole PR is reviewed again.</param>
+    /// <param name="ownThreads">rtfd's threads from earlier reviews; the ones still open are the agent's to resolve or leave.</param>
+    /// <param name="rejection">The validator's errors from the last attempt, for a retry.</param>
+    public static string Render(
+        string promptFile, RunFolder run, DiffModel diff, FollowUpPass? followUp = null, IReadOnlyList<OwnThread>? ownThreads = null,
+        IReadOnlyList<string>? rejection = null)
     {
         var text = new StringBuilder(promptFile.TrimEnd());
         text.Append("\n\n---\n\n");
@@ -37,6 +44,49 @@ public static class PromptRenderer
         if (diff.IsPartial)
         {
             text.Append($"The diff is over the size cap, so these files are left out of `full.diff` and this review: {string.Join(", ", diff.Skipped.Select(f => f.Path))}.\n\n");
+        }
+
+        if (followUp is not null)
+        {
+            text.Append($"## A follow-up\n\nYou reviewed this PR before, at {followUp.LastHead[..12]}. ");
+            if (followUp.Interdiff is { } interdiff)
+            {
+                text.Append("""
+                    `inputs/interdiff.diff` holds what the author changed since then, without what
+                    came in from the base branch. Review that, with `full.diff` as the context: a
+                    change can make something elsewhere in the PR worth raising, but don't go over
+                    what you reviewed last time again. Anchors still go by the files at the PR head.
+
+                    """);
+                if (interdiff.IsPartial)
+                {
+                    text.Append($"The interdiff is over the size cap, so these files are left out of it (they are in `full.diff`): {string.Join(", ", interdiff.Skipped.Select(f => f.Path))}.\n");
+                }
+            }
+            else
+            {
+                text.Append($"The changes since then can't be told apart from the base branch's ({followUp.FullReviewReason}), so review the whole PR again.\n");
+            }
+
+            text.Append('\n');
+        }
+
+        if (ownThreads?.Count(t => t.CountsOpen) is > 0)
+        {
+            text.Append("""
+                ## Your open threads
+
+                Your threads from earlier reviews that are still open are under `own` in
+                `inputs/threads.json`, with what you said, the code it was about and any replies.
+                Look at the code at the PR head for each one:
+
+                - Fixed: resolve it. The reply defaults to "Looks good now."; write your own only
+                  when there is more to say.
+                - Not fixed: leave it out of `threads`. It stays open and still counts, so don't
+                  raise it again as a new finding, and don't reply just to say it's still open.
+                - Partly fixed, or a reply that needs an answer: reply, and don't resolve it.
+
+                """);
         }
 
         text.Append("""
@@ -73,8 +123,9 @@ public static class PromptRenderer
             - `anchor` is a short piece of the line you mean, copied exactly from the file (not from
               the diff, so no `+` or `-`). rtfd finds the line from it, so the anchor matters more
               than `line`. A finding outside the diff goes in the summary instead of on a line.
-            - `threads` lists actions on your own threads: `{"id": "...", "action": "resolve", "reply": "Looks good now."}`
-              or `{"id": "...", "action": "reply", "reply": "..."}`. Leave it empty when there are none.
+            - `threads` lists actions on your own open threads, by their `id` in `inputs/threads.json`:
+              `{"id": "...", "action": "resolve", "reply": "Looks good now."}` or
+              `{"id": "...", "action": "reply", "reply": "..."}`. Leave it empty when there are none.
             - No other fields. In particular there is no verdict: rtfd decides it from your findings
               and puts it first in the review, so the summary shouldn't say whether the PR is ready.
             - With nothing to raise, return an empty `findings` list and a one-line summary.

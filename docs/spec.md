@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe) and `rtfd retry` exist; follow-ups and `serve` are next.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe, with follow-ups) and `rtfd retry` exist; `serve` is next.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -173,7 +173,7 @@ Tools:
 - `diff(from, to, path?)`: between two commits of this PR or its merge base.
 
 Rules:
-- every `sha` must be the PR head, the merge base, the last reviewed head, or a commit between them;
+- every `sha` must be the PR head, the merge base or a commit between them, or on a follow-up the last reviewed head, its merge base or a commit between those (after a rebase the two ranges share nothing, and both are the PR's);
 - every `path` must resolve inside the repo; no absolute paths, no `..`;
 - command lines are fixed by rtfd: no `--output`, no pager, `--no-ext-diff`, `--no-textconv`, and the mirror's own config only (see Run manager);
 - output is capped in size; a truncated result says so.
@@ -210,7 +210,7 @@ If rtfd crashes between steps 1 and 3, the next run sees the unfinished record. 
 
 **Confirming the post.** After posting, rtfd reads the review back and confirms it is there, with its inline comments.
 
-**A lost state store.** On GitHub, the review body carries a hidden marker (`<!-- rtfd sha=abc123 run=7 -->`), and each review lists its own inline comments, so rtfd can rebuild its thread list from the provider. The severity comes from the comment's leading word (Should / Could / MINOR). Where nothing can be rebuilt (Bitbucket), rtfd's older threads are treated like other people's threads: read-only input, never resolved by rtfd.
+**A lost state store.** On GitHub, the review body carries a hidden marker (`<!-- rtfd sha=abc123 base=def456 run=7 -->`: the head and its merge base), and the PR's review comments name the review they belong to, so rtfd can rebuild its thread list and its last review from the provider when the store doesn't know a PR. The severity comes from the comment's leading word (Should / Could / MINOR). Which threads rtfd resolved itself can't be rebuilt: a thread already resolved counts as resolved by rtfd, so it is never reported as a hand resolve. Where nothing can be rebuilt (Bitbucket), rtfd's older threads are treated like other people's threads: read-only input, never resolved by rtfd.
 
 ## Architecture
 
@@ -259,14 +259,15 @@ Each provider has its own quirks. For example, Bitbucket's comment list doesn't 
 - **Quiet period:** no new pushes for `quiet_period`, so five quick pushes produce one review, not five. Only pushes reset it.
 - **CI settled:** all checks finished. A repo with no checks configured doesn't wait. Checks still pending after `ci_max_wait` don't block forever: the review goes ahead and the summary says CI hadn't finished. A later CI result triggers a CI-change pass as usual.
 
-It also decides what a follow-up pass looks at:
-- **Normal push:** the last reviewed head can be fetched. rtfd builds the interdiff:
+It also decides what a follow-up pass looks at. rtfd keeps every head it reviews in its mirror (decision 53), so the last reviewed head is there even after a force-push removed it from the remote.
+- **A push, a base merge or a rebase:** rtfd builds the interdiff:
   1. take the PR diff as it was at the last review (old head against its merge base);
-  2. apply it onto the new merge base, in a scratch worktree;
+  2. apply it onto the new merge base, as a three-way merge in rtfd's mirror (decision 54);
   3. diff that against the new head.
 
-  What remains is exactly what the author changed, without code that came in from merging the base branch into the PR. (A plain `git diff old_head new_head` would include other people's base-branch code.)
-- **The apply conflicts, the last reviewed head can't be fetched** (after a force-push it may be gone from the remote), **or it is no longer an ancestor** (rebase): a full review of the PR. The existing threads are kept and passed in as usual. Inline threads on lines that moved show as outdated on the provider; their anchors are what the agent uses to decide whether they're fixed.
+  What remains is exactly what the author changed, without code that came in from merging the base branch into the PR or rebasing onto it. (A plain `git diff old_head new_head` would include other people's base-branch code.) It doesn't need the old head to be an ancestor of the new one.
+- **Nothing of the author's changed** (the interdiff is empty, as after a push that only merges the base branch): no review. The head counts as reviewed, and the next follow-up starts from it (decision 55).
+- **The apply conflicts, or the last reviewed head can't be found** (not in the mirror, and the remote won't serve it): a full review of the PR. The existing threads are kept and passed in as usual. Inline threads on lines that moved show as outdated on the provider; their anchors are what the agent uses to decide whether they're fixed.
 
 **Run manager.** rtfd keeps **its own bare mirror of each repo** under its data directory. It never touches the user's working clones: their refs, config and lock files stay theirs, and the mirror's git config is rtfd's alone (no hooks, no fsmonitor, nothing that runs a command). Per run, it creates:
 - a worktree from the mirror, keyed by SHA, with agent configuration files reset to the base branch (overwritten, or deleted where the base branch has none);
@@ -299,7 +300,7 @@ It sorts each run's outcome:
 - attempts per commit;
 - the last CI state seen;
 - the write-ahead posting records, with body hashes, and the ids of everything rtfd posted;
-- each of rtfd's threads with its severity, and whether a hand resolve has been reported (resolution itself is always re-read from the provider);
+- each of rtfd's threads with its severity, whether rtfd resolved it, and whether a hand resolve has been reported (resolution itself is always re-read from the provider);
 - the hash of the prompt file used for each review, so it's clear which prompt produced which tone.
 
 Per agent account: the paused-until time.
@@ -436,7 +437,7 @@ The full list is two to three weeks of work, so it ships in steps. Each step rep
 - the finding for PRs that change agent configuration;
 - the `trusted` tier only, with the config contradictions refused;
 - posting with write-ahead dedupe by body hash, verification, and store rebuild from markers;
-- follow-up passes on normal pushes (interdiff), resolving its own fixed threads;
+- follow-up passes (the interdiff, rebases and force-pushes included), resolving its own fixed threads;
 - quiet period, capped CI wait, path excludes, diff size cap;
 - `serve`, `status`, `run --dry-run`, `retry`, `install-service`, `validate`.
 
@@ -451,7 +452,6 @@ The full list is two to three weeks of work, so it ships in steps. Each step rep
 **v1: Bitbucket + Copilot.** Replaces the work watchers that don't need a browser check.
 - the Bitbucket provider (thread resolution via the single-comment endpoint; no marker, so no store rebuild);
 - the copilot agent adapter, with its isolation and permission flags verified on the installed version;
-- the rebase and force-push fallback;
 - other people's threads as read-only input;
 - rtfc notifications on state changes.
 
@@ -492,7 +492,7 @@ From the second review:
 14. **Secrets in the diff are reported, not hidden.** Redact and add a Should. Only a secret from outside the diff blocks the post.
 15. **Secret patterns:** the gitleaks rule set, loaded as data, plus extra regexes from the config.
 16. **Thread resolution is always read from the provider.**
-17. **Rebases fall back to a full review**, keeping the existing threads.
+17. ~~**Rebases fall back to a full review**, keeping the existing threads.~~ *Replaced by 53.*
 18. **Self-review downgrade covers request-changes too**, not just approve.
 19. **Other people's threads are read-only input**, on trusted repos only.
 20. **Confinement is declared per agent**, and `validate` reports what an agent can't enforce. *(Extended by 31: `validate` prints the full effective tool list.)*
@@ -503,7 +503,7 @@ From the third review:
 22. ~~**Shell access is an allowlist** of read-only git commands.~~ *Replaced by 32.*
 23. **Own threads = stored ids + posting identity as author.** Dedupe uses a write-ahead record in the state store. *(Refined by 34: crash recovery matches by body hash; the marker is only for rebuilding a lost store.)*
 24. **Follow-ups review only what the author changed in the PR's diff**, not `git diff old new`. *(Refined by 36: how the interdiff is built, and the full diff as context.)*
-25. **An old head that can't be fetched counts as a rebase.**
+25. ~~**An old head that can't be fetched counts as a rebase.**~~ *Replaced by 53: reviewed heads are kept, so one is rarely missing, and a missing one means a full review.*
 26. **Usage-limit pauses are per agent account** (`account:`), not per agent entry.
 27. **`human_resolve_closes` defaults to yes everywhere, and is never silent.** *(Refined by 37: reported once in the summary, no reply on the thread.)*
 28. **Copilot on trusted repos needs no container.** *(Confirmed by 38.)*
@@ -546,6 +546,16 @@ From building Phase 3:
 50. **A post is never retried blindly.** After a 5xx, a timeout or a dropped connection the review may have landed, so the write-ahead record stays open and is matched by body hash, at once and again at the next run. Only a rate limit, which GitHub answers before doing anything, is retried.
 51. **A review that never landed is posted from its record.** The write-ahead record keeps every body in full, so after a crash before the post the next run posts what was recorded, on the same head, without running the agent again. If the PR has moved on, the old review is dropped and the new head gets its own.
 52. **One review per head, and a dry run touches no state.** A head with a review that landed is refused until it changes; `--dry-run` reads, runs the agent and prints, but records nothing and counts no attempt.
+
+From building Phase 4:
+
+53. **Reviewed heads are kept in rtfd's mirror** (`refs/rtfd/reviewed/<pr>/<sha>`), so a force-push can't take one away, and since the interdiff doesn't need ancestry, a rebased PR gets an interdiff instead of a full review. A full review is left for an apply that conflicts and a head that can't be found anywhere. This pulls the rebase fallback into v0, as the owner decided on 2026-10-15.
+54. **The interdiff is a three-way merge in the mirror**: `git merge-tree --write-tree --merge-base=<old merge base> <new merge base> <old head>` applies the old PR diff onto the new merge base, and the resulting tree is diffed against the new head. Exit code 1 is a conflict. No scratch worktree, nothing checked out; it needs git 2.40 or later.
+55. **A push that changes nothing of the author's isn't reviewed.** An empty interdiff means every finding still stands; the head counts as reviewed and nothing posts.
+56. **Replies and resolves go after the review, through the same write-ahead record.** Each reply's body and hash are recorded before anything is sent. After a crash, a reply is looked for on its thread by hash before it is sent again, and rtfd records a resolve before asking for it, so a crash in between never reads as a hand resolve. A review the provider refuses takes its replies with it.
+57. **Hand resolves are reported for the severities that block** (the verdict rule's), once per thread, after the summary that says it landed. A Could or a MINOR resolved by hand changes no verdict, so it isn't worth a line.
+58. **Replies on rtfd's threads reach the agent only from the posting identity and the author allowlist.** On a public repo anyone can reply on a thread, and that is outside text (decision 19).
+59. **rtfd doesn't repeat its own Shoulds.** Its Should on a committed credential or on executable agent configuration is left out where one of its earlier threads already says it, so a follow-up doesn't open the same thread twice or count it twice.
 
 ## Open questions
 

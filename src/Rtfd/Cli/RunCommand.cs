@@ -17,8 +17,9 @@ internal sealed record RunServices(Func<RepoConfig, ProviderToken, IProvider> Pr
 
 /// <summary>
 /// <c>rtfd run &lt;repo&gt; --pr &lt;n&gt; [--dry-run] [--inputs-only] [--keep] [--verbose] [--config &lt;path&gt;]</c>:
-/// one review now. With <c>--dry-run</c> it prints what it would post and touches no state.
-/// Without it, it posts the review once, through the write-ahead record, and reads it back.
+/// one review now. With <c>--dry-run</c> it prints what it would post and records nothing.
+/// Without it, it posts the review once, through the write-ahead record, and reads it back. On a
+/// PR rtfd reviewed before, either way it is a follow-up: the interdiff, and rtfd's own threads.
 /// </summary>
 internal static class RunCommand
 {
@@ -83,9 +84,12 @@ internal static class RunCommand
 
         if (dryRun)
         {
-            var report = ReviewRun.RunAsync(request).GetAwaiter().GetResult();
+            // A dry run reads what rtfd knows, so the follow-up it prints is the one that would run,
+            // and writes nothing: a PR the store doesn't know is rebuilt in memory only.
+            using var store = File.Exists(config.Data.StatePath) ? StateStore.Open(config.Data.StatePath) : null;
+            var report = ReviewRun.RunAsync(request with { History = new ReviewHistory(store, persist: false, services.Clock, ctx.Stderr) }).GetAwaiter().GetResult();
             DryRunPrinter.Print(report, request, ctx.Stdout, commandLine.Flag("verbose"));
-            return report.Refused is null && (report.Outcome is OutcomeKind.Ok || (request.InputsOnly && report.Outcome is null))
+            return report.Refused is null && (report.Outcome is OutcomeKind.Ok || report.Unchanged is not null || (request.InputsOnly && report.Outcome is null))
                 ? EntryPoint.Ok
                 : EntryPoint.Failure;
         }
@@ -119,15 +123,24 @@ internal static class RunCommand
             }
 
             var hooks = new StoreHooks(store, repo, services.Clock);
-            var report = await ReviewRun.RunAsync(request with { Hooks = hooks }).ConfigureAwait(false);
+            var history = new ReviewHistory(store, persist: true, services.Clock, ctx.Stderr);
+            var report = await ReviewRun.RunAsync(request with { Hooks = hooks, History = history }).ConfigureAwait(false);
             DryRunPrinter.Print(report, request, output, verbose, posting: true);
+            if (report.Unchanged is not null && report.Commits is { } same)
+            {
+                // Nothing of the author's changed: this head counts as reviewed, and the next follow-up starts here.
+                store.SetLastReviewed(repo.Name, pr.Number, same.Head, same.MergeBase);
+                hooks.Finish(report, "unchanged", report.Unchanged);
+                return EntryPoint.Ok;
+            }
+
             if (report.Refused is not null || report.Outcome != OutcomeKind.Ok || report.Plan is not { } plan || hooks.RunId is not { } runId)
             {
                 hooks.Finish(report);
                 return EntryPoint.Failure;
             }
 
-            var posted = await poster.PostAsync(runId, report.PullRequest!, report.Commits!.Head, report.PostingIdentity!, plan).ConfigureAwait(false);
+            var posted = await poster.PostAsync(runId, report.PullRequest!, report.Commits!.Head, report.Commits.MergeBase, report.PostingIdentity!, plan).ConfigureAwait(false);
             if (posted.Status == PostStatus.Rejected)
             {
                 // GitHub refusing a review means the validator let something through: count it invalid.
@@ -158,6 +171,11 @@ internal static class RunCommand
     {
         var link = outcome.Url is { } url ? $" {url}" : "";
         var comments = $"{outcome.Comments} inline comment{(outcome.Comments == 1 ? "" : "s")}";
+        if (outcome.Replies > 0)
+        {
+            comments += $", and {outcome.Replies} repl{(outcome.Replies == 1 ? "y" : "ies")} on earlier threads ({outcome.Resolved} resolved)";
+        }
+
         output.WriteLine(outcome.Status switch
         {
             PostStatus.Posted => $"Posted the review as {verdictEvent}, with {comments}.{link}",
@@ -171,7 +189,7 @@ internal static class RunCommand
         if (outcome.Landed)
         {
             output.WriteLine(outcome.Verified
-                ? "Read back from GitHub: the summary, the event and every inline comment are there as sent."
+                ? $"Read back from GitHub: the summary, the event and every inline comment{(outcome.Replies > 0 ? " and reply" : "")} are there as sent."
                 : $"Read back from GitHub, with problems: {string.Join("; ", outcome.Problems)}");
         }
 

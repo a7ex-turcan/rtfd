@@ -27,12 +27,18 @@ public sealed class GitHubProvider : IProvider, IDisposable
               reviewThreads(first: 100, after: $after) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
-                  id isResolved isOutdated resolvedBy { login } path line
+                  id isResolved isOutdated resolvedBy { login } path line originalLine
                   comments(first: 100) { nodes { databaseId author { login } body createdAt } }
                 }
               }
             }
           }
+        }
+        """;
+
+    private const string ResolveMutation = """
+        mutation($id: ID!) {
+          resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
         }
         """;
 
@@ -153,6 +159,7 @@ public sealed class GitHubProvider : IProvider, IDisposable
                 ResolvedBy = t.ResolvedBy?.Login,
                 Path = t.Path,
                 Line = t.Line,
+                OriginalLine = t.OriginalLine,
                 Comments = [.. t.Comments.Nodes.Select(c => new ThreadComment(c.DatabaseId, c.Author?.Login ?? "ghost", c.Body, c.CreatedAt))],
             }));
             after = page.PageInfo.HasNextPage ? page.PageInfo.EndCursor : null;
@@ -219,6 +226,56 @@ public sealed class GitHubProvider : IProvider, IDisposable
 
         return reviews;
     }
+
+    public async Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default)
+    {
+        // This list has each comment's line and review; a review's own comment list leaves the lines out.
+        var comments = new List<ReviewComment>();
+        string? next = $"repos/{_slug}/pulls/{number}/comments?per_page=100";
+        while (next is not null)
+        {
+            using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Get, next), cancellationToken).ConfigureAwait(false);
+            comments.AddRange((await ReadAsync(response, GitHubJson.Default.ListGhReviewComment, cancellationToken).ConfigureAwait(false)).Select(Map));
+            next = NextLink(response);
+        }
+
+        return comments;
+    }
+
+    public async Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, $"repos/{_slug}/pulls/{number}/comments/{commentId}/replies")
+        {
+            Content = JsonContent.Create(new GhReplyRequest(body), GitHubJson.Default.GhReplyRequest),
+        }, cancellationToken, idempotent: false).ConfigureAwait(false);
+
+        return Map(await ReadAsync(response, GitHubJson.Default.GhReviewComment, cancellationToken).ConfigureAwait(false));
+    }
+
+    public async Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default)
+    {
+        // Resolving twice changes nothing, so this one may be retried like a read.
+        var request = new GqlResolveRequest(ResolveMutation, new GqlResolveVariables(threadId));
+        using var response = await SendAsync(() => new HttpRequestMessage(HttpMethod.Post, "graphql")
+        {
+            Content = JsonContent.Create(request, GitHubGraphQlJson.Default.GqlResolveRequest),
+        }, cancellationToken).ConfigureAwait(false);
+
+        var body = await ReadAsync(response, GitHubGraphQlJson.Default.GqlResponseGqlResolveData, cancellationToken).ConfigureAwait(false);
+        if (body.Errors is { Count: > 0 } errors)
+        {
+            throw new ProviderException($"GitHub GraphQL: {string.Join("; ", errors.Select(e => e.Message))}");
+        }
+
+        if (body.Data?.ResolveReviewThread?.Thread is not { IsResolved: true })
+        {
+            throw new ProviderException($"GitHub didn't resolve thread {threadId}");
+        }
+    }
+
+    private static ReviewComment Map(GhReviewComment c) => new(
+        c.Id.ToString(CultureInfo.InvariantCulture), c.User?.Login ?? "ghost", c.PullRequestReviewId?.ToString(CultureInfo.InvariantCulture),
+        c.InReplyToId?.ToString(CultureInfo.InvariantCulture), c.Path, c.Line, c.OriginalLine, c.Body, c.CreatedAt);
 
     private static string EventName(Verdict verdict) => verdict switch
     {

@@ -16,7 +16,7 @@ change, and record the reason in `docs/implementation.md`. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run --dry-run` and the `rtfd-git` MCP server today; posting, `serve`, `status` and the rest to come |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry` and the `rtfd-git` MCP server today; `serve`, `status` and the rest to come |
 | `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
 | `tests/FakeAgent/` | C# | A stand-in agent CLI, built as `claude`, with canned output, for tests |
 
@@ -52,8 +52,17 @@ its hash) holds the write-ahead record; `Posting/Poster.cs` posts one review on 
 reads it back and checks every body by hash, and settles what a crash left open before anything
 new posts (found by hash: nothing posts; not found: the recorded bodies post, without the agent).
 `Posting/StoreHooks.cs` gives each head one review and its attempts; `rtfd retry` clears attempts
-and secret blocks. A dry run touches no state. Next is Phase 4, follow-ups. Update this section
-when a phase lands.
+and secret blocks. A dry run touches no state.
+
+**Phase 4 is built** (2026-10-15): on a PR rtfd reviewed before, `rtfd run` is a follow-up.
+`Posting/ReviewHistory.cs` loads the last review and rtfd's threads from the store, or rebuilds
+them from the review markers when the store doesn't know the PR; `Review/OwnThreads.cs` joins them
+with the provider's threads (own = stored id and the posting identity as author; resolution from
+the provider); `Git/Interdiff.cs` builds the interdiff with `git merge-tree` in the mirror, where
+every reviewed head is kept (`refs/rtfd/reviewed/<pr>/<sha>`, the owner's call). The validator
+takes rtfd's own threads, the verdict counts the ones still open, and `Poster` sends replies and
+resolves after the review, through the same write-ahead record. Next is Phase 5, `serve`. Update
+this section when a phase lands.
 
 ## Hard rules
 
@@ -213,8 +222,6 @@ Unverified, needed by v0:
 - Whether a user-level `~/.claude/CLAUDE.md` loads under the flags: it only shows in the model's
   context, and checking needs a model call under the user's own login. This machine has none, and
   `validate` warns when one exists (`agent.user_memory_present`).
-- GitHub: `resolveReviewThread` (Phase 4). Review threads come from GraphQL `reviewThreads`
-  (checked, with recordings).
 
 Checked:
 
@@ -224,6 +231,16 @@ Checked:
   trailing whitespace normalized), as `COMMENTED` on the given `commit_id`, and shows in the review
   list. One inline comment outside the diff fails the whole review with a 422 whose `errors` say
   why. The marker `<!-- rtfd ... -->` doesn't render.
+- 2026-10-15, GitHub, on the sandbox (recordings in `Recordings/github/`, `GitHubLiveTests`):
+  `POST /pulls/{n}/comments/{id}/replies` replies on a thread, and creates an empty COMMENTED review
+  for each reply. GraphQL `resolveReviewThread(input: {threadId})` resolves; resolving a resolved
+  thread succeeds again; a bad id comes back as `errors` with type `NOT_FOUND` and HTTP 200.
+  `resolvedBy` is the token's login, so rtfd's resolves and the owner's look the same. A review's own
+  comment list (`/reviews/{id}/comments`) has `line: null`; the PR's (`/pulls/{n}/comments`) has
+  `line`, `original_line`, `pull_request_review_id` and `in_reply_to_id`.
+- 2026-10-15, git 2.47.1: `git merge-tree --write-tree --no-messages --merge-base=<base> <ours>
+  <theirs>` works in a bare repository: the first line of stdout is the tree, exit 1 is a conflict.
+  It needs git 2.40 or later. The old watcher's comments end with `<!-- prwatch -->`.
 
 ## Open decisions
 
@@ -231,8 +248,8 @@ Don't settle these silently in code. Raise them.
 
 - The spec's open questions (the name, isolation flags, a dedicated OS account, Bitbucket without a
   marker).
-- Every ❓ in `docs/plan.md`, such as where the worktree sits, rebases in v0, and keeping reviewed
-  heads as local refs.
+- Every ❓ in `docs/plan.md`, such as config reloads in `serve` (Phase 5), a scheduled task or a
+  Windows service (Phase 6), and how rtfd reaches rtfc (Phase 7).
 
 ## Commands
 
@@ -298,7 +315,8 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `examples/` | A sample home: `rtfd.yaml` and `prompts/review.md`. CI validates it with the AOT binary |
 | `src/Rtfd/` | `EntryPoint.cs` dispatch · `RtfdHome.cs` home and data directory · `Cli/` commands and args · `Config/` loader, cursor, model, built-ins per agent CLI, checks |
 | `src/Rtfd/` (Phase 1) | `Providers/` GitHub read side · `Git/` GitRunner, mirror, diff model, worktree and config reset · `Processes/` ProcessRunner, allowlisted environment · `Agents/` claude adapter, output extraction, outcomes, limit parser · `GitTools/` rtfd-git · `Review/` findings contract, validator, review builder and verdict, `Secrets/` · `Runs/` run folder, prompt, `ReviewRun`, dry-run printout |
+| `src/Rtfd/` (Phases 2 to 4) | `Agents/AgentProbe.cs` and `Config/ProviderChecks.cs` (validate) · `State/` the SQLite store and `schema.sql` · `Posting/` Poster (write-ahead posting, replies, resolves, recovery), StoreHooks (one review per head, attempts), ReviewHistory (the last review and rtfd's threads, rebuilt from markers when lost) · `Git/Interdiff.cs` · `Review/OwnThreads.cs` |
 | `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
-| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider, FakeAgent, RunHarness · `Recordings/github/` real GitHub answers, trimmed |
-| `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment and stdin |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, crash seams), FakeAgent, RunHarness · `Recordings/github/` real GitHub answers, trimmed |
+| `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment, stdin and the run folder's inputs |
 | `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary |

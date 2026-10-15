@@ -34,7 +34,10 @@ internal sealed record GhReviewRequest(string CommitId, string Body, string Even
 
 internal sealed record GhReview(long Id, GhUser? User, string? Body, string State, string? CommitId, DateTimeOffset? SubmittedAt, string? HtmlUrl);
 
-internal sealed record GhReviewComment(long Id, string Path, int? Line, string Body);
+internal sealed record GhReviewComment(
+    long Id, string Path, int? Line, int? OriginalLine, string Body, GhUser? User, long? PullRequestReviewId, long? InReplyToId, DateTimeOffset? CreatedAt);
+
+internal sealed record GhReplyRequest(string Body);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(GhUser))]
@@ -47,7 +50,9 @@ internal sealed record GhReviewComment(long Id, string Path, int? Line, string B
 [JsonSerializable(typeof(GhReviewRequest))]
 [JsonSerializable(typeof(GhReview))]
 [JsonSerializable(typeof(List<GhReview>))]
+[JsonSerializable(typeof(GhReviewComment))]
 [JsonSerializable(typeof(List<GhReviewComment>))]
+[JsonSerializable(typeof(GhReplyRequest))]
 internal sealed partial class GitHubJson : JsonSerializerContext;
 
 // GraphQL: review threads and their resolution exist only there.
@@ -65,7 +70,7 @@ internal sealed record GqlComment(long DatabaseId, GqlActor? Author, string Body
 internal sealed record GqlComments(List<GqlComment> Nodes);
 
 internal sealed record GqlThread(
-    string Id, bool IsResolved, bool IsOutdated, GqlActor? ResolvedBy, string? Path, int? Line, GqlComments Comments);
+    string Id, bool IsResolved, bool IsOutdated, GqlActor? ResolvedBy, string? Path, int? Line, int? OriginalLine, GqlComments Comments);
 
 internal sealed record GqlThreads(GqlPageInfo PageInfo, List<GqlThread> Nodes);
 
@@ -75,6 +80,16 @@ internal sealed record GqlRepository(GqlPullRequest? PullRequest);
 
 internal sealed record GqlThreadsData(GqlRepository? Repository);
 
+internal sealed record GqlResolveVariables(string Id);
+
+internal sealed record GqlResolveRequest(string Query, GqlResolveVariables Variables);
+
+internal sealed record GqlResolvedThread(string Id, bool IsResolved);
+
+internal sealed record GqlResolvePayload(GqlResolvedThread? Thread);
+
+internal sealed record GqlResolveData(GqlResolvePayload? ResolveReviewThread);
+
 internal sealed record GqlError(string Message);
 
 internal sealed record GqlResponse<T>(T? Data, List<GqlError>? Errors);
@@ -82,4 +97,6 @@ internal sealed record GqlResponse<T>(T? Data, List<GqlError>? Errors);
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(GqlRequest))]
 [JsonSerializable(typeof(GqlResponse<GqlThreadsData>))]
+[JsonSerializable(typeof(GqlResolveRequest))]
+[JsonSerializable(typeof(GqlResponse<GqlResolveData>))]
 internal sealed partial class GitHubGraphQlJson : JsonSerializerContext;

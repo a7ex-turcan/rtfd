@@ -7,7 +7,7 @@ using System.Text.Json.Nodes;
 // file says what to print on each call, in order:
 //
 //   {
-//     "record": "<path>",               // appends one JSON line per call: args, env, cwd, stdin
+//     "record": "<path>",               // appends one JSON line per call: args, env, cwd, stdin, inputs/
 //     "responses": [
 //       { "result": "...", "exit": 0 },  // printed in claude's JSON wrapper, as `result`
 //       { "stdout": "...", "stderr": "...", "exit": 1 },  // printed as is
@@ -71,12 +71,24 @@ if (scenario["record"]?.GetValue<string>() is { } recordPath)
         environment[(string)entry.Key] = (string?)entry.Value;
     }
 
+    // The run folder's inputs as the agent found them, since rtfd deletes the folder afterwards.
+    var inputs = new JsonObject();
+    var inputsFolder = Path.Combine(Environment.CurrentDirectory, "inputs");
+    if (Directory.Exists(inputsFolder))
+    {
+        foreach (var file in Directory.GetFiles(inputsFolder).Order(StringComparer.Ordinal))
+        {
+            inputs[Path.GetFileName(file)] = File.ReadAllText(file);
+        }
+    }
+
     var record = new JsonObject
     {
         ["args"] = new JsonArray([.. args.Select(a => (JsonNode)a)]),
         ["env"] = environment,
         ["cwd"] = Environment.CurrentDirectory,
         ["stdin"] = stdin,
+        ["inputs"] = inputs,
     };
     File.AppendAllText(recordPath, record.ToJsonString() + "\n");
 }

@@ -107,6 +107,17 @@ public sealed class SecretScanner
     /// <summary>The first characters, then a marker: <c>ghp_…REDACTED</c>.</summary>
     public static string Redact(string secret) => (secret.Length > 12 ? secret[..4] : "") + "…REDACTED";
 
+    /// <summary>The text with every secret this scanner finds redacted: for what rtfd prints or keeps, never posts.</summary>
+    public string RedactAll(string text)
+    {
+        foreach (var match in Scan(text))
+        {
+            text = text.Replace(match.Secret, Redact(match.Secret), StringComparison.Ordinal);
+        }
+
+        return text;
+    }
+
     /// <summary>gitleaks' rule: the secret group when set, else the first group that matched, else the whole match.</summary>
     private static string SecretOf(Match match, int secretGroup)
     {

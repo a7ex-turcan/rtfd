@@ -32,21 +32,36 @@ public sealed partial class GitToolset
         _allowed = allowed;
     }
 
-    /// <summary>The commits an argument may name: the head, the merge base, the last reviewed head and every commit between.</summary>
+    /// <summary>
+    /// The commits an argument may name: the head, the merge base and every commit between, and on
+    /// a follow-up the last reviewed head, its merge base and every commit between those. After a
+    /// rebase the two ranges share nothing, and both are this PR's.
+    /// </summary>
     public IReadOnlySet<string> AllowedCommits => _allowed;
 
     public static async Task<GitToolset> OpenAsync(GitToolsBinding binding, Func<string, string?> environment, CancellationToken cancellationToken = default)
     {
         var git = new GitRunner(binding.GitDirectory, environment, []);
         var allowed = new HashSet<string>(StringComparer.Ordinal) { binding.Head, binding.MergeBase };
+        allowed.UnionWith(await RangeAsync(git, binding.Mirror, binding.MergeBase, binding.Head, cancellationToken).ConfigureAwait(false));
+
         if (binding.LastReviewedHead is { } last)
         {
             allowed.Add(last);
+            if (binding.LastMergeBase is { } lastBase)
+            {
+                allowed.Add(lastBase);
+                allowed.UnionWith(await RangeAsync(git, binding.Mirror, lastBase, last, cancellationToken).ConfigureAwait(false));
+            }
         }
 
-        var between = await git.RunCheckedAsync(binding.Mirror, ["rev-list", "--end-of-options", $"{binding.MergeBase}..{binding.Head}"], cancellationToken: cancellationToken).ConfigureAwait(false);
-        allowed.UnionWith(between.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         return new GitToolset(git, binding, allowed);
+    }
+
+    private static async Task<IEnumerable<string>> RangeAsync(GitRunner git, string mirror, string from, string to, CancellationToken cancellationToken)
+    {
+        var commits = await git.RunCheckedAsync(mirror, ["rev-list", "--end-of-options", $"{from}..{to}"], cancellationToken: cancellationToken).ConfigureAwait(false);
+        return commits.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     /// <summary>Commits on the PR, newest first, or the history of one path from the head.</summary>
@@ -155,7 +170,8 @@ public sealed partial class GitToolset
         var full = result.Stdout.Trim();
         if (!result.Ok || !_allowed.Contains(full))
         {
-            throw new ToolRefusal($"{Shorten(sha)} isn't a commit of this PR. Use the head ({_binding.Head[..12]}), the merge base ({_binding.MergeBase[..12]}) or a commit between them (log lists them).");
+            var last = _binding.LastReviewedHead is { } reviewed ? $", the head you reviewed last time ({reviewed[..12]})" : "";
+            throw new ToolRefusal($"{Shorten(sha)} isn't a commit of this PR. Use the head ({_binding.Head[..12]}), the merge base ({_binding.MergeBase[..12]}){last} or a commit between them (log lists them).");
         }
 
         return full;

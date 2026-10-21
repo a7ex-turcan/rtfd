@@ -317,7 +317,21 @@ written for the person running rtfd. Internal refactors don't.
 
 Releases follow the siblings: the version in `src/Rtfd/Rtfd.csproj` and a new section in the
 changelog, a `vX.Y.Z` tag, Native AOT binaries per platform, a GitHub Release. GitHub Releases only.
-Semver; before 1.0, minor may break. Don't bump the version for ordinary commits.
+Semver; before 1.0, minor may break. Don't bump the version for ordinary commits. To release:
+
+1. Set `<Version>` in `src/Rtfd/Rtfd.csproj` to `X.Y.Z` (drop `-dev`; `X.Y.Z-rc.1` makes a
+   prerelease).
+2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, drop its "Nothing
+   released yet" line, and put a new empty `## [Unreleased]` above it.
+3. Commit, push, and optionally rehearse: Actions > Release > Run workflow builds and checks every
+   archive and keeps them as workflow artifacts, without publishing.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`. `.github/workflows/release.yml` refuses a tag that
+   doesn't match the csproj and the newest changelog section, runs `ci.yml`, publishes Native AOT
+   per platform (Linux inside Ubuntu 22.04, for an old glibc), smoke-tests each unpacked archive,
+   and publishes the release with that changelog section as its notes.
+5. Set the csproj to the next `-dev` version.
+
+Tagging and pushing a tag publish to the world: only when the owner says to release.
 
 ## Where things are
 
@@ -343,4 +357,5 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
 | `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand) · `Recordings/github/` real GitHub answers, trimmed |
 | `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment, stdin and the run folder's inputs |
-| `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary |
+| `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary. Also called by the release |
+| `.github/workflows/release.yml` | A `vX.Y.Z` tag: the version checks, `ci.yml`, a Native AOT archive per platform, smoke-tested, and a GitHub Release with the changelog section as notes. Run by hand, a rehearsal that publishes nothing |

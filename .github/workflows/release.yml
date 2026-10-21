@@ -1,0 +1,242 @@
+name: Release
+
+# Pushing a vX.Y.Z tag publishes a GitHub Release: a ready-to-use archive per platform and the
+# CHANGELOG.md section for that version as the release notes. The tag must match the version in
+# src/Rtfd/Rtfd.csproj and the newest section of CHANGELOG.md, or nothing is built. GitHub
+# Releases only, as for the siblings.
+#
+# Running it by hand (Actions > Release > Run workflow) is a rehearsal: everything is built and
+# checked, the archives and the notes are kept as workflow artifacts, and nothing is published.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never interrupt a publish halfway
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag, the csproj and the changelog name one version
+        id: check
+        run: |
+          set -euo pipefail
+          csproj=$(sed -nE 's|.*<Version>([^<]+)</Version>.*|\1|p' src/Rtfd/Rtfd.csproj)
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            # A rehearsal builds what main declares, with the Unreleased notes.
+            echo "rehearsal of $csproj"
+            echo "version=$csproj" >> "$GITHUB_OUTPUT"
+            echo "section=Unreleased" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          changelog=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\]' CHANGELOG.md | sed -E 's/^## \[(.*)\]$/\1/' || true)
+          echo "tag=$tag csproj=$csproj changelog=$changelog"
+          if [ "$tag" != "$csproj" ] || [ "$tag" != "$changelog" ]; then
+            echo "::error::The tag ($tag), src/Rtfd/Rtfd.csproj ($csproj) and the newest CHANGELOG.md section ($changelog) must name the same version."
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "section=$tag" >> "$GITHUB_ENV"
+
+      # The changelog is the release notes. Literal matching, not a regex built from the version:
+      # the dots and the brackets are regex characters, and a mistake there gives an empty file
+      # rather than an error, hence the guard.
+      - name: The release notes, from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          awk -v section="$section" '
+            BEGIN { head = "## [" section "]" }
+            substr($0, 1, length(head)) == head   { on = 1; next }
+            on && substr($0, 1, 4) == "## ["       { exit }
+            on                                    { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section [$section], or it is empty."
+            exit 1
+          fi
+          cat >> notes.md <<'EOF'
+
+          ---
+
+          **Install:** download the archive for your platform, unpack it anywhere and put the folder on
+          your `PATH`. Copy `examples/rtfd.yaml` and `examples/prompts/` into `~/.rtfd` (or the folder
+          `RTFD_HOME` names), edit them, and run `rtfd validate`. You need git and a logged-in Claude
+          Code; nothing else. `SHA256SUMS` lists every archive's checksum. The README has the rest.
+          EOF
+          cat notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+          if-no-files-found: error
+
+  # The same checks as every push: build, the tests and the format check on Windows and Linux,
+  # and the guards against the published AOT binary. An archive people download deserves them
+  # even when the tagged commit already passed.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [version, ci]
+    strategy:
+      fail-fast: false # one platform failing shouldn't hide whether the others build
+      matrix:
+        include:
+          - { os: windows-latest, rid: win-x64, archive: zip }
+          - { os: ubuntu-latest, rid: linux-x64, archive: tar }
+          - { os: macos-latest, rid: osx-arm64, archive: tar }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        if: runner.os != 'Linux'
+        with:
+          global-json-file: global.json
+
+      # Native AOT doesn't cross-compile between systems, hence a runner per platform. A Linux
+      # binary needs the build host's glibc or newer, and the runner's is too new for Debian 12
+      # or Ubuntu 22.04, so it's built inside Ubuntu 22.04 (rtfq found this the hard way).
+      - name: Publish (Linux, Ubuntu 22.04's glibc)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ubuntu:22.04 bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq curl ca-certificates clang zlib1g-dev libicu70 > /dev/null
+            curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+            bash /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet --no-path
+            export PATH=/usr/share/dotnet:$PATH DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+            dotnet publish src/Rtfd -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
+          '
+          sudo chown -R "$USER" publish
+
+      - name: Publish (Windows and macOS)
+        if: runner.os != 'Linux'
+        run: dotnet publish src/Rtfd -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
+
+      - name: The Linux binary runs on Ubuntu 22.04 and Debian 12
+        if: runner.os == 'Linux'
+        run: |
+          ceiling=2.35
+          highest=$(objdump -T publish/rtfd publish/*.so | grep -oE 'GLIBC_2\.[0-9]+' | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "highest glibc symbol required: $highest (ceiling $ceiling)"
+          if [ "$(printf '%s\n%s\n' "$highest" "$ceiling" | sort -V | tail -1)" != "$ceiling" ]; then
+            echo "::error::the binary needs glibc $highest; refusing to ship it"
+            exit 1
+          fi
+
+      # Ready to use: the binary with its native SQLite library, the sample home to copy, and the
+      # docs. Debug symbols stay out.
+      - name: Stage the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="rtfd-$VERSION-${{ matrix.rid }}"
+          echo "PACKAGE=$name" >> "$GITHUB_ENV"
+          mkdir -p "stage/$name/examples/prompts"
+          for f in publish/*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.pdb|*.dbg|*.dwarf) continue ;; esac
+            cp "$f" "stage/$name/"
+          done
+          [ "${{ runner.os }}" = "Windows" ] || chmod +x "stage/$name/rtfd"
+          cp examples/rtfd.yaml "stage/$name/examples/"
+          cp examples/prompts/review.md "stage/$name/examples/prompts/"
+          cp README.md CHANGELOG.md LICENSE "stage/$name/"
+          cp src/Rtfd/Resources/gitleaks-LICENSE.txt "stage/$name/LICENSE-gitleaks.txt"
+          ls -la "stage/$name"
+
+      # The package must work from where it lands: the version it reports, the config loader and
+      # checks, and SQLite's native library loading from the folder.
+      - name: The package works on its own
+        shell: bash
+        run: |
+          set -euo pipefail
+          # D:/a/... on Windows: a form both Git Bash and the native binary read the same way.
+          root="$PWD"
+          [ "${{ runner.os }}" = "Windows" ] && root=$(cygpath -m "$PWD")
+          dir="$root/stage/$PACKAGE"
+          bin="$dir/rtfd"
+          [ "${{ runner.os }}" = "Windows" ] && bin="$dir/rtfd.exe"
+          reported=$("$bin" --version)
+          echo "tag=$VERSION binary=$reported"
+          [ "$reported" = "$VERSION" ] || { echo "::error::the binary says $reported, the release is $VERSION"; exit 1; }
+          export RTFD_HOME="$root/rtfd-home"
+          mkdir -p "$RTFD_HOME"
+          "$bin" validate --config "$dir/examples/rtfd.yaml" --config-only
+          out=$("$bin" retry sandbox --pr 1 --config "$dir/examples/rtfd.yaml")
+          echo "$out"
+          echo "$out" | grep -q 'nothing to clear'
+          [ -f "$RTFD_HOME/state.db" ] || { echo "::error::the state store didn't open"; exit 1; }
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "stage/$env:PACKAGE" -DestinationPath "$env:PACKAGE.zip"
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar'
+        run: tar -czf "$PACKAGE.tar.gz" -C stage "$PACKAGE"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.rid }}
+          path: |
+            *.zip
+            *.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          mkdir upload
+          cp artifacts/package-*/* upload/
+          (cd upload && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "rtfd $VERSION" \
+            --notes-file artifacts/notes/notes.md \
+            $prerelease \
+            upload/*

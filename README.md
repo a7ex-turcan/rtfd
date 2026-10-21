@@ -26,7 +26,8 @@ posted when you're happy with it.
 
 ### What you need
 
-- **The .NET 10 SDK** (10.0.300 or later), to build rtfd. There are no release binaries yet.
+- **The .NET 10 SDK** (10.0.300 or later), only to build rtfd from source. A release archive
+  needs nothing else.
 - **git** 2.25 or later on `PATH`.
 - **Claude Code**, installed and logged in: run `claude` once and log in. rtfd starts Claude with a
   short allowlist of environment variables (`PATH`, your profile folders, the temp folder), so a
@@ -35,7 +36,16 @@ posted when you're happy with it.
 
 Tested on Windows 11 with Claude Code 2.1.296 and git 2.47.
 
-### 1. Build it
+### 1. Get it
+
+Download the archive for your platform from the
+[releases page](https://github.com/a7ex-turcan/rtfd/releases): `win-x64` (a zip), `linux-x64` or
+`osx-arm64` (a tar.gz). Unpack it anywhere and add the folder to your `PATH`. It holds `rtfd`
+(`rtfd.exe` on Windows) with its SQLite library, `examples/` for step 2, and these docs. Each
+release's notes are its section of [`CHANGELOG.md`](CHANGELOG.md), and `SHA256SUMS` lists the
+archives' checksums.
+
+Before the first release, or for the latest `main`, build it instead:
 
 ```bash
 git clone https://github.com/a7ex-turcan/rtfd.git
@@ -43,13 +53,14 @@ cd rtfd
 dotnet publish src/Rtfd -c Release -o "$HOME/.rtfd/bin"
 ```
 
-That puts `rtfd` (`rtfd.exe` on Windows) in `~/.rtfd/bin`. Add the folder to your `PATH`, or call
-rtfd by its full path. To update later, pull and run the same `dotnet publish` again.
+That puts `rtfd` in `~/.rtfd/bin`. Add the folder to your `PATH`, or call rtfd by its full path. To
+update later, pull and run the same `dotnet publish` again.
 
 ### 2. Set up your home
 
 rtfd reads its config from `~/.rtfd/rtfd.yaml` (`%USERPROFILE%\.rtfd\rtfd.yaml` on Windows). Set
-`RTFD_HOME` to use another folder, or pass `--config <path>` to any command. Start from the sample:
+`RTFD_HOME` to use another folder, or pass `--config <path>` to any command. Start from the sample,
+in the unpacked archive or the clone:
 
 ```bash
 # bash

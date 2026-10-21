@@ -72,3 +72,7 @@ Nothing released yet. The design is in `docs/spec.md` and the build order in `do
   deletes the leftover run folders and worktrees (not `--keep` ones).
 - Polls of GitHub are conditional, so an unchanged PR list or CI state doesn't count against the
   rate limit.
+- Releases. Each one on GitHub has a ready-to-use archive per platform (Windows x64, Linux x64,
+  macOS arm64): the binary with its SQLite library, the sample home to copy, the README, this
+  changelog and the licences, plus their checksums. The release notes are this changelog's section
+  for the version.

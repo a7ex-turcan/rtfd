@@ -585,7 +585,8 @@ no window anyone can close, and the two personal-machine PowerShell watchers are
    rtfd. Not both at once, or PRs get reviewed twice. nutrx's half of Phase 5's 48 h run happens
    here, and it is rtfd's first real post to nutrx.
 6. **Release 0.1.0** as the siblings release: a `vX.Y.Z` tag, Native AOT binaries per platform, a
-   GitHub Release.
+   GitHub Release. *(The workflow is built: `.github/workflows/release.yml`, 2026-10-21. The steps
+   are in CLAUDE.md.)*
 
 ### Exit criteria
 

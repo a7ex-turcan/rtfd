@@ -1,0 +1,81 @@
+{
+  "value": [
+    {
+      "configuration": {
+        "id": 31,
+        "type": { "id": "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e", "displayName": "Work item linking" },
+        "isEnabled": true,
+        "isBlocking": false,
+        "settings": { "scope": [{ "refName": "refs/heads/develop", "matchKind": "Exact", "repositoryId": null }] }
+      },
+      "artifactId": "vstfs:///CodeReview/CodeReviewId/3c1d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f/7",
+      "evaluationId": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f0a1b2c3d",
+      "startedDate": "2026-10-20T09:00:04.2Z",
+      "status": "approved",
+      "context": { "linkedWorkItemIds": [4711] }
+    },
+    {
+      "configuration": {
+        "id": 32,
+        "type": { "id": "0609b952-1397-4640-95ec-e00a01b2c241", "displayName": "Build" },
+        "isEnabled": true,
+        "isBlocking": true,
+        "settings": { "buildDefinitionId": 17, "queueOnSourceUpdateOnly": true, "manualQueueOnly": false, "displayName": null, "validDuration": 0.0 }
+      },
+      "evaluationId": "b1c2d3e4-f5a6-4b7c-8d8e-9f0a1b2c3d4e",
+      "startedDate": "2026-10-20T11:30:01.5Z",
+      "status": "approved",
+      "context": {
+        "lastMergeCommitId": "0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3",
+        "lastMergeSourceCommitId": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e",
+        "lastMergeTargetCommitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+        "buildId": 4242,
+        "buildDefinitionId": 17,
+        "buildDefinitionName": "Web App - Validation",
+        "buildIsNotCurrent": false,
+        "buildStartedUtc": "2026-10-20T11:30:01.25Z",
+        "isExpired": false,
+        "buildAfterMerge": false,
+        "wasAutoRequeued": false,
+        "buildOutputPreview": null
+      }
+    },
+    {
+      "configuration": {
+        "id": 33,
+        "type": { "id": "0609b952-1397-4640-95ec-e00a01b2c241", "displayName": "Build" },
+        "isEnabled": true,
+        "isBlocking": false,
+        "settings": { "buildDefinitionId": 18, "queueOnSourceUpdateOnly": false, "manualQueueOnly": true, "displayName": "Nightly checks", "validDuration": 0.0 }
+      },
+      "evaluationId": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
+      "status": "queued",
+      "context": null
+    },
+    {
+      "configuration": {
+        "id": 34,
+        "type": { "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd", "displayName": "Minimum number of reviewers" },
+        "isEnabled": true,
+        "isBlocking": true,
+        "settings": { "minimumApproverCount": 1, "creatorVoteCounts": false }
+      },
+      "evaluationId": "d3e4f5a6-b7c8-4d9e-8f0a-1b2c3d4e5f6a",
+      "status": "queued",
+      "context": null
+    },
+    {
+      "configuration": {
+        "id": 35,
+        "type": { "id": "cbdc66da-9728-4af8-aada-9a5a32e4a226", "displayName": "Status" },
+        "isEnabled": true,
+        "isBlocking": true,
+        "settings": { "statusName": "SAST Scan", "statusGenre": "Scanner" }
+      },
+      "evaluationId": "e4f5a6b7-c8d9-4e0f-9a1b-2c3d4e5f6a7b",
+      "status": "approved",
+      "context": { "latestStatusId": 4 }
+    }
+  ],
+  "count": 5
+}

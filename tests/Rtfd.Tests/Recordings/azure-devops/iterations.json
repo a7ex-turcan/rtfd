@@ -1,0 +1,29 @@
+{
+  "value": [
+    {
+      "id": 1,
+      "description": "Count by amount",
+      "author": { "displayName": "Ada Author", "uniqueName": "author@contoso.com" },
+      "createdDate": "2026-10-20T09:00:00.1Z",
+      "updatedDate": "2026-10-20T09:00:00.1Z",
+      "sourceRefCommit": { "commitId": "1e3c5a7b9d1f3e5c7a9b1d3f5e7c9a1b3d5f7e9c" },
+      "targetRefCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" },
+      "commonRefCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" },
+      "hasMoreCommits": false,
+      "reason": "create"
+    },
+    {
+      "id": 2,
+      "description": "Guard the amount",
+      "author": { "displayName": "Ada Author", "uniqueName": "author@contoso.com" },
+      "createdDate": "2026-10-20T11:30:00.1Z",
+      "updatedDate": "2026-10-20T11:30:00.1Z",
+      "sourceRefCommit": { "commitId": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e" },
+      "targetRefCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" },
+      "commonRefCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" },
+      "hasMoreCommits": false,
+      "reason": "push"
+    }
+  ],
+  "count": 2
+}

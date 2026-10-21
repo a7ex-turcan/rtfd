@@ -113,7 +113,7 @@ public static class OwnThreads
     }
 
     /// <summary>The comment that starts a thread, as the id rtfd stores.</summary>
-    public static string RootId(ReviewThread thread) => thread.Comments[0].Id.ToString(CultureInfo.InvariantCulture);
+    public static string RootId(ReviewThread thread) => thread.Comments[0].Id;
 
     public static FindingSeverity? Severity(string? text) => text?.ToLowerInvariant() switch
     {

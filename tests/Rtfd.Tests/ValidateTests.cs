@@ -203,39 +203,17 @@ public sealed class AgentProbeTests : IDisposable
 
 public sealed class ProviderChecksTests
 {
-    private sealed class StubProvider(Func<string> whoami, Func<RepositoryInfo> repository) : IProvider
+    private sealed class StubProvider(Func<string> whoami, Func<RepositoryInfo> repository) : ThrowingProvider
     {
         public int WhoAmICalls { get; private set; }
 
-        public Task<string> WhoAmIAsync(CancellationToken cancellationToken = default)
+        public override Task<string> WhoAmIAsync(CancellationToken cancellationToken = default)
         {
             WhoAmICalls++;
             return Task.FromResult(whoami());
         }
 
-        public Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) => Task.FromResult(repository());
-
-        public Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<CiState> GetCiStateAsync(string sha, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<ReviewThread>> GetReviewThreadsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Git.FetchSource FetchSource(PullRequest pullRequest) => throw new NotSupportedException();
-
-        public Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public override Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) => Task.FromResult(repository());
     }
 
     private static RtfdConfig Config(TempHome home, string authors = "[owner]")
@@ -252,13 +230,13 @@ public sealed class ProviderChecksTests
     {
         using var home = new TempHome();
         var calls = 0;
-        IProvider Providers(RepoConfig repo, ProviderToken token)
+        IProvider Providers(RepoConfig repo, TokenSource tokens)
         {
             var stub = new StubProvider(() => { calls++; throw new ProviderException("GitHub refused the token (401): Bad credentials.", 401); }, () => new RepositoryInfo(true, "main"));
             return stub;
         }
 
-        var (repos, diagnostics) = await ProviderChecks.RunAsync(Config(home), n => n == "GH_TOKEN" ? "bad" : null, Providers, TestContext.Current.CancellationToken);
+        var (repos, diagnostics) = await ProviderChecks.RunAsync(Config(home), TestTokens.From(n => n == "GH_TOKEN" ? "bad" : null), Providers, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, calls);
         Assert.Equal(["nutrx", "other"], diagnostics.Select(d => d.Message.Split(':')[0]));
@@ -273,8 +251,8 @@ public sealed class ProviderChecksTests
         using var home = new TempHome();
         var config = Config(home, authors: "[\"*\"]");
 
-        var (_, onPublic) = await ProviderChecks.RunAsync(config, _ => "token", (_, _) => new StubProvider(() => "owner", () => new RepositoryInfo(true, "main")), TestContext.Current.CancellationToken);
-        var (repos, onPrivate) = await ProviderChecks.RunAsync(config, _ => "token", (_, _) => new StubProvider(() => "owner", () => new RepositoryInfo(false, "main")), TestContext.Current.CancellationToken);
+        var (_, onPublic) = await ProviderChecks.RunAsync(config, TestTokens.From(_ => "token"), (_, _) => new StubProvider(() => "owner", () => new RepositoryInfo(true, "main")), TestContext.Current.CancellationToken);
+        var (repos, onPrivate) = await ProviderChecks.RunAsync(config, TestTokens.From(_ => "token"), (_, _) => new StubProvider(() => "owner", () => new RepositoryInfo(false, "main")), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, onPublic.Count(d => d.Check == "config.authors_everyone_public"));
         Assert.Empty(onPrivate);
@@ -286,7 +264,7 @@ public sealed class ProviderChecksTests
     {
         using var home = new TempHome();
 
-        var (_, diagnostics) = await ProviderChecks.RunAsync(Config(home), _ => "token",
+        var (_, diagnostics) = await ProviderChecks.RunAsync(Config(home), TestTokens.From(_ => "token"),
             (repo, _) => new StubProvider(() => "owner", () => repo.Name == "other" ? throw new ProviderException("GitHub has no repos/owner/other (404).", 404) : new RepositoryInfo(false, "main")),
             TestContext.Current.CancellationToken);
 
@@ -299,7 +277,7 @@ public sealed class ProviderChecksTests
     {
         using var home = new TempHome();
 
-        var (repos, diagnostics) = await ProviderChecks.RunAsync(Config(home), _ => null, (_, _) => throw new InvalidOperationException("no provider without a token"), TestContext.Current.CancellationToken);
+        var (repos, diagnostics) = await ProviderChecks.RunAsync(Config(home), TestTokens.From(_ => null), (_, _) => throw new InvalidOperationException("no provider without a token"), TestContext.Current.CancellationToken);
 
         Assert.Empty(diagnostics);
         Assert.All(repos, r => Assert.Equal("GH_TOKEN isn't set", r.Skipped));
@@ -352,33 +330,11 @@ public sealed class ValidateCommandPhase2Tests : IDisposable
         return (code, stdout.ToString());
     }
 
-    private sealed class StubProviderForValidate : IProvider
+    private sealed class StubProviderForValidate : ThrowingProvider
     {
-        public Task<string> WhoAmIAsync(CancellationToken cancellationToken = default) => Task.FromResult("owner");
+        public override Task<string> WhoAmIAsync(CancellationToken cancellationToken = default) => Task.FromResult("owner");
 
-        public Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) => Task.FromResult(new RepositoryInfo(true, "main"));
-
-        public Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<CiState> GetCiStateAsync(string sha, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<ReviewThread>> GetReviewThreadsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Git.FetchSource FetchSource(PullRequest pullRequest) => throw new NotSupportedException();
-
-        public Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<ReviewComment>> ListReviewCommentsAsync(int number, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task<ReviewComment> ReplyAsync(int number, string commentId, string body, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public override Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) => Task.FromResult(new RepositoryInfo(true, "main"));
     }
 
     [Fact]

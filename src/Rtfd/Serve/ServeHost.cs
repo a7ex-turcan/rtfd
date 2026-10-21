@@ -41,7 +41,7 @@ public sealed class ServeHost : IDisposable
     {
         var log = _context.Log;
         log.Write($"rtfd {EntryPoint.Version} serve started (pid {Environment.ProcessId}), config {_context.Config.FilePath}, data {_context.Config.Data.Root}.");
-        var (reports, diagnostics) = await ProviderChecks.RunAsync(_context.Config, _context.Environment, _context.Providers, stop).ConfigureAwait(false);
+        var (reports, diagnostics) = await ProviderChecks.RunAsync(_context.Config, _context.Tokens, _context.Providers, stop).ConfigureAwait(false);
         foreach (var watcher in Watchers)
         {
             var repo = watcher.Repo;
@@ -55,6 +55,14 @@ public sealed class ServeHost : IDisposable
             if (problems.Count > 0)
             {
                 var reason = string.Join(" ", problems.Select(p => p.StartsWith(repo.Name + ": ", StringComparison.Ordinal) ? p[(repo.Name.Length + 2)..] : p)).TrimEnd('.');
+
+                // A token the Azure CLI renews comes back once you log in again: the repo keeps trying.
+                if (!_context.Tokens.For(repo).ReadOnce && diagnostics.All(d => !d.IsError || d.Check == "provider.token_refused" || !d.Path.StartsWith(repo.Path + ".", StringComparison.Ordinal)))
+                {
+                    log.Write($"{repo.Name}: waiting for a token: {reason}. Trying again every {RepoWatcher.Span(repo.Settings.Interval)}.");
+                    continue;
+                }
+
                 watcher.StopUntilRestart($"{reason}. Fix it and restart serve");
                 log.Write($"{repo.Name}: not watched: {reason}.");
                 continue;

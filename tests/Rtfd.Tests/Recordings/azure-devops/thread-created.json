@@ -1,0 +1,30 @@
+{
+  "pullRequestThreadContext": {
+    "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 2 },
+    "changeTrackingId": 1
+  },
+  "id": 110,
+  "publishedDate": "2026-10-21T08:00:00.5Z",
+  "lastUpdatedDate": "2026-10-21T08:00:00.5Z",
+  "comments": [
+    {
+      "id": 1,
+      "parentCommentId": 0,
+      "author": { "displayName": "Rae Viewer", "id": "6f1b2a3c-1d4e-4f50-8a6b-7c8d9e0f1a21", "uniqueName": "reviewer@contoso.com" },
+      "content": "Should: a negative amount makes a count go below zero.",
+      "publishedDate": "2026-10-21T08:00:00.5Z",
+      "lastUpdatedDate": "2026-10-21T08:00:00.5Z",
+      "commentType": "text"
+    }
+  ],
+  "status": "active",
+  "threadContext": {
+    "filePath": "/src/counter.py",
+    "rightFileStart": { "line": 6, "offset": 1 },
+    "rightFileEnd": { "line": 7, "offset": 1 }
+  },
+  "properties": {
+    "rtfd.review": { "$type": "System.String", "$value": "109" }
+  },
+  "isDeleted": false
+}

@@ -77,9 +77,10 @@ public sealed class RunHarness : IDisposable
             Keep = keep,
             InputsOnly = inputsOnly,
             Environment = Environment,
-            Providers = (_, token) =>
+            Tokens = TestTokens.From(Environment),
+            Providers = (_, tokens) =>
             {
-                Provider.Token = token;
+                Provider.Token = tokens.Current;
                 return Provider;
             },
             RtfdExecutable = "rtfd-test-binary",
@@ -95,6 +96,16 @@ public sealed class RunHarness : IDisposable
         Home.Dispose();
         Git.Dispose();
     }
+}
+
+/// <summary>Token sources for tests: the variables from the test's environment, and an Azure CLI a test hands in.</summary>
+public static class TestTokens
+{
+    public static TokenSources From(Func<string, string?> environment, Func<string?, TokenSource>? azureCli = null) =>
+        new(environment, azureCli ?? (_ => throw new InvalidOperationException("this test has no Azure CLI")));
+
+    /// <summary>One token, as if read from <c>GH_TOKEN</c>.</summary>
+    public static TokenSource Fixed(string token) => new EnvironmentTokenSource("GH_TOKEN", name => name == "GH_TOKEN" ? token : null);
 }
 
 /// <summary>Token-shaped strings built at run time, so no token-shaped literal sits in the repo.</summary>

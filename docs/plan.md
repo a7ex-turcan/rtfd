@@ -40,6 +40,7 @@ Four rules govern the sequence:
 | **3** | Posting | A review lands exactly once, even across a crash, and is confirmed | v0 step 3 |
 | **4** | Follow-ups | A fixed thread gets "Looks good now." and is resolved; only the interdiff is reviewed | v0 step 4 |
 | **5** | `serve` | 48 h unattended (the sandbox; nutrx at Phase 6's switchover): every new head reviewed once, none twice | v0 step 5 |
+| **5b** | Azure DevOps | `run` and `serve` review Azure DevOps PRs as they do GitHub's, with tokens from the Azure CLI | Azure DevOps, ahead of v1 |
 | **6** | `install-service` | Survives reboot, battery and 72 h with no window; personal scripts retired. **v0 done** | v0 step 6 |
 | **7** | v1: Bitbucket + Copilot | The work watchers that need no browser check are retired | v1 |
 | | Later | One item at a time, each when something real needs it | Later |
@@ -63,7 +64,7 @@ Directory.Packages.props     central package versions
 src/Rtfd/
   Cli/                       hand-rolled dispatcher, one class per command
   Config/                    YAML to typed model (YamlDotNet node model, mapped by hand), checks
-  Providers/                 IProvider; GitHub/ (REST + GraphQL); Bitbucket/ in v1
+  Providers/                 IProvider, token sources; GitHub/ (REST + GraphQL); AzureDevOps/ (REST); Bitbucket/ in v1
   Git/                       GitRunner (hardened env), mirror, worktrees, diff model, interdiff
   GitTools/                  the rtfd-git MCP server (hand-rolled JSON-RPC)
   Processes/                 ProcessRunner (allowlisted env, tree kill), ChildEnvironment
@@ -562,6 +563,62 @@ run is on the sandbox now, with nutrx's half at Phase 6's switchover (all three 
 
 ---
 
+## Phase 5b: Azure DevOps
+
+**Goal:** everything rtfd does on GitHub, on Azure DevOps Services, as the owner asked on
+2026-10-21 (spec decision 69). Put ahead of Phase 6 and v1.
+
+**Status (2026-10-21): built.** The read side, posting, follow-ups, `validate` and `serve` work on a
+real organization; the owner's three calls are tokens from the Azure CLI, test posts on a scratch
+draft PR in one of their work repos, and verdicts as votes.
+
+### Scope
+
+1. **The provider** (`Providers/AzureDevOps/`), REST 7.1: who the token is (`connectionData`), the
+   repo and its project's visibility, active PRs, iterations, threads tracked to the newest
+   iteration, CI from build policies and statuses, the head fetched by SHA (there's no head ref).
+2. **Posting a thread at a time** (spec decision 71): `IProvider.Posting` says whether a review is
+   one request or a thread each; `Poster` records each thread's id as it comes back and recovers body
+   by body. This is the generalisation Phase 7's Bitbucket needs too.
+3. **Votes** for approve and request changes (decision 72), with the self-review check and no vote
+   on a draft.
+4. **Token sources** (decision 70): `token_env` read once, or `auth: azure_cli` with a `tenant`,
+   renewed five minutes before expiry; shared per variable and per tenant, and every token handed
+   out is known to the secret check and the environment filter.
+5. **Docs and tests**: recorded answers with every name replaced (this repo is public), the
+   per-thread poster against `FakeProvider`, and live tests behind `RTFD_LIVE_AZURE_DEVOPS=1` that
+   name the scratch PR through variables.
+
+### Exit criteria
+
+- ✅ `rtfd validate` gets a token from the Azure CLI and reports the repo and who rtfd posts as.
+  *(On a real organization, 2026-10-21.)*
+- ✅ `rtfd run` reads a PR: the head by SHA (a merged PR's deleted branch too), CI, threads.
+  *(Two completed PRs, one with five threads, two of them open.)*
+- ✅ A review posts and reads back by hash, and each inline thread names its summary.
+  *(`AzureDevOpsLiveTests` on the scratch PR; then a real follow-up review there: interdiff, two
+  inline comments, verified.)*
+- ✅ A crash after two of five comments posts only the missing three.
+  *(`A_crash_after_two_of_five_comments_posts_only_the_other_three`.)*
+- ✅ A lost store is rebuilt from the summary's marker and the threads' property. *(Live: the
+  scratch PR's history rebuilt from the live tests' posts, and the reviewed head refused.)*
+- ✅ `serve` polls an Azure DevOps repo with a renewed token, and keeps trying while the CLI has no
+  token. *(Live poll; `An_Azure_CLI_without_a_token_keeps_the_repo_trying_until_someone_logs_in`.)*
+- Votes read back. *(Not live yet: the scratch PR is a draft, which takes no vote, and publishing it
+  could notify the repo's subscribers. Recorded tests cover the calls.)*
+
+### Risks and decisions
+
+- ✔ Tokens from the Azure CLI (the owner, 2026-10-21). The organization issues only
+  packaging-scoped PATs.
+- ✔ Test posts go to a scratch draft PR between two scratch branches in one of the owner's work
+  repos (the owner, 2026-10-21). Azure DevOps can't delete a PR, so it is abandoned afterwards.
+- ✔ Verdicts as votes (the owner, 2026-10-21).
+- ⚠ Whether Azure DevOps hides the marker's `<!-- -->` in the summary, and how a closed summary
+  thread shows on the PR page, need a look at the page; the API reads them back as sent.
+
+---
+
 ## Phase 6: `install-service`, then retire the scripts
 
 **Goal:** rtfd runs unattended on the personal machine through reboots, battery and long uptimes, with
@@ -653,7 +710,7 @@ From the spec, each when something real needs it:
 - "Bring your own runner" through rtfc.
 - Two agents on one PR with merged findings.
 - Cost and token tracking per review.
-- GitLab and Azure DevOps.
+- GitLab, and Azure DevOps Server (self-hosted). *(Azure DevOps Services came early: Phase 5b.)*
 
 ---
 

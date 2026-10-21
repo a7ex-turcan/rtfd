@@ -9,6 +9,20 @@ major for a breaking change to the CLI, the config file or the findings contract
 
 ## [Unreleased]
 
+### Added
+
+- Azure DevOps. A repo with `provider: azure_devops` and `repo: organization/project/repository`
+  works with `run`, `serve`, `validate`, `status` and follow-ups, as a GitHub repo does. `authors`
+  are Azure DevOps sign-in names.
+- `auth: azure_cli`, with an optional `tenant`, gets an Azure DevOps token from the Azure CLI instead
+  of a variable, and renews it before it expires, so `serve` keeps running. A CLI that isn't logged
+  in keeps the repo trying until you run `az login`; no restart needed. A PAT in `token_env` works
+  too.
+- On Azure DevOps a review is a resolved summary comment and a thread per inline comment, and the
+  verdict is a vote: approve gives "Approved", request changes "Waiting for author". There's no vote
+  on your own PR or on a draft. A crash partway through a review posts only the comments that
+  didn't land.
+
 ## [0.1.0-rc.1] - 2026-10-21
 
 The first release candidate of v0: GitHub and Claude Code. `rtfd run` reviews one PR now, and

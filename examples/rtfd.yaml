@@ -46,3 +46,15 @@ repos:
     authors: [a7ex-turcan]
     verdicts: [comment]
     token_env: GH_TOKEN
+
+  # An Azure DevOps repo looks like this:
+  # - name: web-app
+  #   provider: azure_devops
+  #   repo: contoso/Fabrikam Fiber/web-app   # organization/project/repository
+  #   trust: trusted
+  #   agent: claude
+  #   prompt: prompts/review.md
+  #   authors: [ada@contoso.com]             # Azure DevOps sign-in names
+  #   verdicts: [comment, approve, request_changes]   # votes; never on your own PR or a draft
+  #   auth: azure_cli                        # a token from `az`, renewed; or token_env with a PAT
+  #   tenant: contoso.onmicrosoft.com        # your organization's tenant, if not az's default

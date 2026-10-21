@@ -2,7 +2,6 @@ using Rtfd.Agents;
 using Rtfd.Config;
 using Rtfd.Posting;
 using Rtfd.Providers;
-using Rtfd.Providers.GitHub;
 using Rtfd.Runs;
 using Rtfd.Serve;
 using Rtfd.State;
@@ -11,10 +10,14 @@ namespace Rtfd.Cli;
 
 /// <summary>What <c>run</c> talks to beyond the config; tests pass fakes.</summary>
 /// <param name="LockWait">How long to wait for the repo's lock; 15 seconds, enough for a poll of serve's to let go.</param>
+/// <param name="Tokens">Makes each repo's token source from the environment; null for the real ones (the variables and the Azure CLI).</param>
 internal sealed record RunServices(
-    Func<RepoConfig, ProviderToken, IProvider> Providers, string RtfdExecutable, TimeProvider Clock, Func<TimeSpan, Task>? Delay = null, TimeSpan? LockWait = null)
+    Func<RepoConfig, TokenSource, IProvider> Providers, string RtfdExecutable, TimeProvider Clock, Func<TimeSpan, Task>? Delay = null, TimeSpan? LockWait = null,
+    Func<Func<string, string?>, TokenSources>? Tokens = null)
 {
-    public static RunServices Real => new((repo, token) => new GitHubProvider(repo.Slug, token), Environment.ProcessPath ?? "rtfd", TimeProvider.System);
+    public static RunServices Real => new(ProviderFactory.Create, Environment.ProcessPath ?? "rtfd", TimeProvider.System);
+
+    public TokenSources TokensFor(Func<string, string?> environment) => Tokens?.Invoke(environment) ?? TokenSources.Real(environment, Clock);
 }
 
 /// <summary>
@@ -85,6 +88,7 @@ internal static class RunCommand
             InputsOnly = commandLine.Flag("inputs-only"),
             Keep = commandLine.Flag("keep"),
             Environment = ctx.Environment,
+            Tokens = services.TokensFor(ctx.Environment),
             Providers = services.Providers,
             RtfdExecutable = services.RtfdExecutable,
             Log = ctx.Stderr,
@@ -110,15 +114,21 @@ internal static class RunCommand
     private static async Task<int> LiveAsync(CommandContext ctx, RunRequest request, RunServices services, bool verbose)
     {
         var (repo, output) = (request.Repo, ctx.Stdout);
-        var token = ctx.Environment(repo.TokenEnv);
-        if (string.IsNullOrEmpty(token))
+        var source = request.Tokens.For(repo);
+        try
         {
-            ctx.Stderr.WriteLine($"rtfd run: {repo.TokenEnv} isn't set. It should hold the token rtfd reads and posts to {repo.Slug} with.");
+            await source.GetAsync().ConfigureAwait(false);
+        }
+        catch (ProviderException ex) when (ex.NoToken)
+        {
+            ctx.Stderr.WriteLine(repo.TokenEnv is not null
+                ? $"rtfd run: {repo.TokenEnv} isn't set. It should hold the token rtfd reads and posts to {repo.Slug} with."
+                : $"rtfd run: {ex.Message}");
             return EntryPoint.Failure;
         }
 
         using var store = StateStore.Open(request.Config.Data.StatePath);
-        var provider = services.Providers(repo, new ProviderToken(token));
+        var provider = services.Providers(repo, source);
         try
         {
             var outcome = await LiveRun.RunAsync(request, store, provider, report => DryRunPrinter.Print(report, request, output, verbose, posting: true)).ConfigureAwait(false);
@@ -126,12 +136,12 @@ internal static class RunCommand
             {
                 output.WriteLine($"PR #{outcome.PullRequest.Number}  {outcome.PullRequest.Title}");
                 output.WriteLine();
-                return PrintPosting(output, recovered, outcome.Event!);
+                return PrintPosting(output, recovered, outcome.Event!, ProviderNames.Of(repo.Provider), provider.Posting == ReviewPosting.PerThread);
             }
 
             if (outcome.Posted is { } posted)
             {
-                return PrintPosting(output, posted, outcome.Event!);
+                return PrintPosting(output, posted, outcome.Event!, ProviderNames.Of(repo.Provider), provider.Posting == ReviewPosting.PerThread);
             }
 
             return outcome.Report?.Unchanged is not null ? EntryPoint.Ok : EntryPoint.Failure;
@@ -147,7 +157,7 @@ internal static class RunCommand
         }
     }
 
-    private static int PrintPosting(TextWriter output, PostOutcome outcome, string verdictEvent)
+    private static int PrintPosting(TextWriter output, PostOutcome outcome, string verdictEvent, string provider, bool perThread)
     {
         var link = outcome.Url is { } url ? $" {url}" : "";
         var comments = $"{outcome.Comments} inline comment{(outcome.Comments == 1 ? "" : "s")}";
@@ -168,9 +178,11 @@ internal static class RunCommand
 
         if (outcome.Landed)
         {
+            // Where the vote is apart from the review, a comment has none to read back.
+            var verdict = !perThread ? ", the event" : verdictEvent == "COMMENT" ? "" : ", the vote";
             output.WriteLine(outcome.Verified
-                ? $"Read back from GitHub: the summary, the event and every inline comment{(outcome.Replies > 0 ? " and reply" : "")} are there as sent."
-                : $"Read back from GitHub, with problems: {string.Join("; ", outcome.Problems)}");
+                ? $"Read back from {provider}: the summary{verdict} and every inline comment{(outcome.Replies > 0 ? " and reply" : "")} are there as sent."
+                : $"Read back from {provider}, with problems: {string.Join("; ", outcome.Problems)}");
         }
 
         return outcome.Verified ? EntryPoint.Ok : EntryPoint.Failure;

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Rtfd.Providers;
 
 namespace Rtfd.Config;
 
@@ -149,7 +150,14 @@ public static partial class ConfigChecks
     {
         if (repo.Provider == ProviderKind.Bitbucket)
         {
-            report.Error("config.provider_unsupported", "Bitbucket arrives in v1; this build talks to GitHub only", $"{repo.Path}.provider");
+            report.Error("config.provider_unsupported", "Bitbucket arrives in v1; this build talks to GitHub and Azure DevOps", $"{repo.Path}.provider");
+        }
+
+        if (repo.Auth == TokenAuth.AzureCli && repo.Provider != ProviderKind.AzureDevOps)
+        {
+            report.Error("config.auth_unsupported",
+                $"'auth: azure_cli' gets an Entra ID token, which only Azure DevOps takes; {ProviderNames.Of(repo.Provider)} needs token_env",
+                $"{repo.Path}.auth");
         }
 
         if (repo.Trust == TrustTier.Untrusted)
@@ -170,7 +178,10 @@ public static partial class ConfigChecks
                 report.SettingPath(repo, "context_tools"));
         }
 
-        CheckTokenEnv(repo, environment, report);
+        if (repo.TokenEnv is { } tokenEnv)
+        {
+            CheckTokenEnv(repo, tokenEnv, environment, report);
+        }
 
         if (!File.Exists(repo.PromptPath))
         {
@@ -182,24 +193,24 @@ public static partial class ConfigChecks
     /// <c>token_env</c> names a variable; it never holds the token. A value that looks like a token
     /// is refused, and no message here repeats it, because validate's output gets pasted around.
     /// </summary>
-    private static void CheckTokenEnv(RepoConfig repo, Func<string, string?> environment, Report report)
+    private static void CheckTokenEnv(RepoConfig repo, string tokenEnv, Func<string, string?> environment, Report report)
     {
         var path = $"{repo.Path}.token_env";
-        if (LooksLikeAToken(repo.TokenEnv))
+        if (LooksLikeAToken(tokenEnv))
         {
             report.Error("config.token_env_holds_a_token",
                 "token_env holds what looks like a token. It must name the environment variable that holds it, " +
                 "such as GH_TOKEN (the value isn't shown here)", path);
         }
-        else if (!EnvironmentVariableName().IsMatch(repo.TokenEnv))
+        else if (!EnvironmentVariableName().IsMatch(tokenEnv))
         {
             report.Error("config.token_env_not_a_name",
                 "token_env must be the name of an environment variable, such as GH_TOKEN (the value isn't shown here)", path);
         }
-        else if (string.IsNullOrEmpty(environment(repo.TokenEnv)))
+        else if (string.IsNullOrEmpty(environment(tokenEnv)))
         {
             report.Warning("config.token_env_unset",
-                $"{repo.TokenEnv} is not set in this environment; reviews of this repo fail until it is", path);
+                $"{tokenEnv} is not set in this environment; reviews of this repo fail until it is", path);
         }
     }
 

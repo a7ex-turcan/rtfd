@@ -4,6 +4,73 @@ Where the code goes further than [`spec.md`](spec.md) says, or settles something
 open, and why. The spec is updated in the same change (its "Decisions taken" log, from 42 on);
 this file keeps the reasoning that doesn't belong in the design. Newest first.
 
+## Phase 5b: Azure DevOps (2026-10-21)
+
+### What the real organization showed
+
+Checked read-only against the owner's work organization before anything was built, then with
+posts on a scratch draft PR (none of its names are in this repo):
+
+- Entra ID tokens from `az account get-access-token --resource 499b84ac-...` work for the REST API
+  and, as `http.extraHeader: AUTHORIZATION: bearer ...`, for git.
+- Azure Repos advertises only branches. `refs/pull/N/merge` exists for an active PR (and is gone
+  once it completes); `refs/pull/N/head` doesn't exist at all. A fetch of the head commit by SHA
+  works, even for a completed PR whose branch was deleted. `Mirror` already took any refspec
+  source, so `FetchSource.HeadRef` is the SHA there and nothing else changed.
+- Comment ids count from 1 in every thread. `ThreadComment.Id` became a string, and the provider
+  names a thread's first comment by the thread id and a reply `thread.comment`, so the store, the
+  agent's `threads` and `OwnThreads` all keep one id per thread, as on GitHub.
+- `GET threads?$iteration=N` tracks each thread's position to iteration N, with the original in
+  `trackingCriteria`; a line that is gone has a `threadContext` with no position, which is what
+  "outdated" means here.
+- CI: the build policy evaluations carry `lastMergeSourceCommitId`, so a build is matched to the
+  head; statuses come as a log per iteration, many per name, and only the newest per name counts.
+- The PR list has no ETag, unlike GitHub's, so `GetPageAsync`'s conditional requests had no
+  counterpart to port.
+- A reviewer who isn't on the PR gets a 400, not a 404. A draft takes no vote: "You cannot vote on
+  draft pull requests" (a 400), so `ReviewBuilder.Decide` downgrades a draft's vote to a comment
+  there, like the self-review downgrade, and the review's first line still says what it decided.
+- Thread properties set on creation (`rtfd.review`) come back on every read, and the iteration
+  context and change-tracking id are kept as sent.
+- A wrong tenant answers with a sign-in page (a 302, or a 203 with HTML), not a 401. The provider
+  turns off redirects and counts those as a 401.
+
+### Why tokens became sources
+
+The organization issues only packaging-scoped PATs, and an Entra token lasts about an hour, so a
+variable read once can't feed a `serve` that runs for days. `TokenSource` replaced reading
+`token_env` in five places: `EnvironmentTokenSource` reads once as before, `AzureCliTokenSource`
+asks az again five minutes before expiry, and `TokenSources` shares one per variable and per tenant
+and lists every token handed out so far for the secret scanner and `ChildEnvironment`. A provider
+asks its source before each request, so a renewal reaches the next request without anyone noticing.
+
+az is a Python program behind `az.cmd`, and `ProcessRunner` refuses batch files (they need cmd.exe,
+a shell). The MSI's `az.cmd` only runs `..\python.exe -IBm azure.cli`, so rtfd runs that directly,
+with the allowlisted environment plus `AZURE_CONFIG_DIR`. Its stdout holds the token and is never
+logged; an error shows stderr's first line only.
+
+### Posting a thread at a time
+
+`IProvider.Posting` tells `Poster` which shape the provider takes. The atomic path is unchanged.
+The per-thread path posts the summary, records its id as the review's, posts each inline comment
+with `ReviewId` set to the summary's thread (the provider keeps it in the `rtfd.review` property),
+records each id, then sets the vote. Recovery runs the same method with `recovering: true`, which
+first looks for each unrecorded comment by author, path, time and hash. It doesn't matter whether
+the PR moved on meanwhile: the comments are anchored to the reviewed head's iteration, so they still
+land on the lines they were written for.
+
+The summary is a closed thread. An active one would hold any PR whose branch policy requires every
+comment resolved, and every follow-up would add another. A refused inline comment (a 4xx) is
+reported and skipped rather than failing the review, since the rest of the threads have already
+landed and can't be taken back; on GitHub a 422 means nothing landed.
+
+### Votes and the read-back
+
+`GetReviewAsync` reports the posting identity's current vote as the review's state, so `VerifyAsync`
+reads back an approve or a request-changes as on GitHub. A comment leaves the vote alone, so the
+check is skipped for comments there: an earlier review's vote may still stand, as a request for
+changes still stands on GitHub after a later comment.
+
 ## Phase 5 (2026-10-15)
 
 ### One live run, shared by `rtfd run` and `serve`

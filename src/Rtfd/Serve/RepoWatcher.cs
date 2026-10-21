@@ -15,7 +15,11 @@ public sealed record ServeContext
     public required RtfdConfig Config { get; init; }
     public required StateStore Store { get; init; }
     public required Func<string, string?> Environment { get; init; }
-    public required Func<RepoConfig, ProviderToken, IProvider> Providers { get; init; }
+
+    /// <summary>Each repo's token: read once from its variable, or renewed from the Azure CLI.</summary>
+    public required TokenSources Tokens { get; init; }
+
+    public required Func<RepoConfig, TokenSource, IProvider> Providers { get; init; }
 
     /// <summary>The rtfd binary the agent's <c>mcp.json</c> starts as <c>rtfd-git</c>.</summary>
     public required string RtfdExecutable { get; init; }
@@ -82,6 +86,14 @@ public sealed class RepoWatcher : IDisposable
 
     private DateTimeOffset Now => _context.Clock.GetUtcNow();
 
+    private TokenSource Tokens => _context.Tokens.For(Repo);
+
+    /// <summary>A token read once and refused stays refused: the repo waits for a new one and a restart (spec decision 64).</summary>
+    private string TokenRefused(ProviderException ex) =>
+        ex.NoToken
+            ? $"{ex.Message} Put one there and restart serve"
+            : $"{ProviderNames.Of(Repo.Provider)} refused the token in {Tokens.Describe}: {ex.Message} Put a working one there and restart serve";
+
     private ServeLog Log => _context.Log;
 
     /// <summary>
@@ -139,12 +151,12 @@ public sealed class RepoWatcher : IDisposable
         IReadOnlyList<PullRequest> open;
         try
         {
-            _poller ??= _context.Providers(Repo, new ProviderToken(_context.Environment(Repo.TokenEnv) ?? ""));
+            _poller ??= _context.Providers(Repo, Tokens);
             open = await _poller.ListOpenPullRequestsAsync(stop).ConfigureAwait(false);
         }
-        catch (ProviderException ex) when (ex.IsAuth)
+        catch (ProviderException ex) when (ex.IsAuth && Tokens.ReadOnce)
         {
-            StopUntilRestart($"GitHub refused the token in {Repo.TokenEnv}: {ex.Message} Put a working one there and restart serve");
+            StopUntilRestart(TokenRefused(ex));
             Log.Write($"{Repo.Name}: stopped: {_stopped}.");
             return now + interval;
         }
@@ -258,7 +270,7 @@ public sealed class RepoWatcher : IDisposable
         {
             try
             {
-                var ci = await _poller!.GetCiStateAsync(head, stop).ConfigureAwait(false);
+                var ci = await _poller!.GetCiStateAsync(n, head, stop).ConfigureAwait(false);
                 if (_detector.Apply(new CiSeen(n, head, ci.Summary, now)) is { } note)
                 {
                     Log.Write($"{Repo.Name}: {note}");
@@ -305,7 +317,7 @@ public sealed class RepoWatcher : IDisposable
         IProvider? provider = null;
         try
         {
-            provider = _context.Providers(Repo, new ProviderToken(_context.Environment(Repo.TokenEnv) ?? ""));
+            provider = _context.Providers(Repo, Tokens);
             var request = new RunRequest
             {
                 Config = _context.Config,
@@ -313,6 +325,7 @@ public sealed class RepoWatcher : IDisposable
                 Agent = Agent,
                 Number = pr.Number,
                 Environment = _context.Environment,
+                Tokens = _context.Tokens,
                 Providers = _context.Providers,
                 RtfdExecutable = _context.RtfdExecutable,
                 Log = Log.For($"{name}: "),
@@ -327,9 +340,9 @@ public sealed class RepoWatcher : IDisposable
         {
             Log.Write($"{name}: review abandoned: serve is stopping. The next start reviews it again.");
         }
-        catch (ProviderException ex) when (ex.IsAuth)
+        catch (ProviderException ex) when (ex.IsAuth && Tokens.ReadOnce)
         {
-            StopUntilRestart($"GitHub refused the token in {Repo.TokenEnv}: {ex.Message} Put a working one there and restart serve");
+            StopUntilRestart(TokenRefused(ex));
             Log.Write($"{Repo.Name}: stopped: {_stopped}.");
         }
         catch (ProviderException ex)
@@ -476,8 +489,7 @@ public sealed class RepoWatcher : IDisposable
             }
         }
 
-        var tokens = _context.Config.Repos.Select(r => _context.Environment(r.TokenEnv)).OfType<string>().Where(t => t.Length > 0).Distinct().ToList();
-        var git = new GitRunner(data.GitDirectory, _context.Environment, tokens);
+        var git = new GitRunner(data.GitDirectory, _context.Environment, _context.Tokens.Known(_context.Config));
         var mirror = Mirror.For(data, Repo.Name, git);
         if (File.Exists(Path.Combine(mirror.Path, "HEAD")))
         {
@@ -553,7 +565,7 @@ public sealed class RepoWatcher : IDisposable
             PostStatus.Reposted => $"an earlier run's review never landed, so what it recorded went out now, as {verdictEvent}, with {comments}{link}{problems}",
             PostStatus.Recovered => $"the review an earlier run posted is on the PR; nothing posted again{link}{problems}",
             PostStatus.Unknown => $"the post failed and may still land: {outcome.Message}",
-            PostStatus.Rejected => $"GitHub refused the review: {outcome.Message} It counts as invalid; this is a validator bug worth reporting.",
+            PostStatus.Rejected => $"{outcome.Message} It counts as invalid; this is a validator bug worth reporting.",
             _ => $"the post failed: {outcome.Message}",
         };
     }

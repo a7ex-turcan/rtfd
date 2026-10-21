@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Rtfd.Cli;
 using Rtfd.Config;
+using Rtfd.Providers;
 using Rtfd.Serve;
 using Rtfd.State;
 using Rtfd.Tests.Support;
@@ -70,23 +71,34 @@ public sealed class ServeTests : IDisposable
 
     private string Log => _console.ToString();
 
-    private RtfdConfig Config(string repoExtra = Timing)
+    /// <summary>The repo on Azure DevOps, its token from the Azure CLI.</summary>
+    private static string AzureCli(string yaml) => yaml
+        .Replace("provider: github", "provider: azure_devops", StringComparison.Ordinal)
+        .Replace("repo: owner/repo", "repo: contoso/Fabrikam Fiber/repo", StringComparison.Ordinal)
+        .Replace("token_env: GH_TOKEN", "auth: azure_cli\n    tenant: contoso.onmicrosoft.com", StringComparison.Ordinal);
+
+    private RtfdConfig Config(string repoExtra = Timing, Func<string, string>? change = null)
     {
-        _h.Home.WriteConfig(_h.Yaml(repoExtra));
+        _h.Home.WriteConfig((change ?? (y => y))(_h.Yaml(repoExtra)));
         var loaded = ConfigLoader.LoadFile(_h.Home.ConfigPath, _h.Home.Home);
         Assert.False(loaded.HasErrors, string.Join("\n", loaded.Diagnostics));
         return loaded.Config!;
     }
 
-    private ServeHost Host(string repoExtra = Timing)
+    private ServeHost Host(string repoExtra = Timing, Func<string, string>? change = null, TokenSources? tokens = null)
     {
-        var config = Config(repoExtra);
+        var config = Config(repoExtra, change);
         return new ServeHost(new ServeContext
         {
             Config = config,
             Store = Store,
             Environment = _h.Environment,
-            Providers = (repo, _) => _providers[repo.Name],
+            Tokens = tokens ?? TestTokens.From(_h.Environment),
+            Providers = (repo, source) =>
+            {
+                _providers[repo.Name].Source = source;
+                return _providers[repo.Name];
+            },
             RtfdExecutable = "rtfd-test",
             Log = new ServeLog(config.Data.LogsDirectory, _clock, _console),
             Clock = _clock,
@@ -95,9 +107,9 @@ public sealed class ServeTests : IDisposable
         });
     }
 
-    private async Task<ServeHost> StartedAsync(string repoExtra = Timing)
+    private async Task<ServeHost> StartedAsync(string repoExtra = Timing, Func<string, string>? change = null, TokenSources? tokens = null)
     {
-        var host = Host(repoExtra);
+        var host = Host(repoExtra, change, tokens);
         await host.StartAsync(_ct);
         return host;
     }
@@ -390,6 +402,31 @@ public sealed class ServeTests : IDisposable
         Assert.Contains("marked 2 runs a stopped serve or `rtfd run` never finished as abandoned", Log);
         Assert.Equal("abandoned", Store.LastRuns("repo").Single().Outcome);
         Assert.Contains("the review an earlier run posted is on the PR; nothing posted again", Log);
+    }
+
+    [Fact]
+    public async Task An_Azure_CLI_without_a_token_keeps_the_repo_trying_until_someone_logs_in()
+    {
+        var loggedIn = false;
+        var tokens = TestTokens.From(_h.Environment, tenant => new AzureCliTokenSource(tenant, _clock, (_, _) => Task.FromResult(loggedIn
+            ? new AzureCliAnswer(0, $$"""{"accessToken": "eyJ{{Tokens.Random(20)}}.{{Tokens.Random(20)}}.{{Tokens.Random(20)}}", "expires_on": {{(_clock.Now + TimeSpan.FromHours(1)).ToUnixTimeSeconds()}}}""", "")
+            : new AzureCliAnswer(1, "", "ERROR: Please run 'az login' to setup account."))));
+        using var host = await StartedAsync(change: AzureCli, tokens: tokens);
+        var watcher = host.Watchers[0];
+        Assert.Contains("repo: waiting for a token: the Azure CLI (tenant contoso.onmicrosoft.com) gave no token", Log);
+
+        await watcher.TickAsync(_ct);
+
+        Assert.Equal("watching", watcher.Status.State);
+        Assert.Contains("repo: the poll failed: the Azure CLI (tenant contoso.onmicrosoft.com) gave no token: ERROR: Please run 'az login' to setup account.", Log);
+        Assert.Equal(0, Provider.ListCalls);
+
+        loggedIn = true;
+        _clock.Advance(TimeSpan.FromMinutes(1));
+        await watcher.TickAsync(_ct);
+
+        Assert.Equal(1, Provider.ListCalls);
+        Assert.Contains("repo: 1 open PR", Log);
     }
 
     [Fact]

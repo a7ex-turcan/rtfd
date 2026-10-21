@@ -10,7 +10,7 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 
 **Status: early. It watches, reviews, posts and follows up.** `rtfd serve` watches every configured
 repo and reviews each new head once, when the pushes have settled and CI has finished; `rtfd status`
-says whether it is watching. `rtfd run <repo> --pr <n>` reviews one GitHub PR with Claude Code now,
+says whether it is watching. `rtfd run <repo> --pr <n>` reviews one GitHub or Azure DevOps PR with Claude Code now,
 posting once, crash-safe, and reading it back; `--dry-run` prints it instead. After a push, rtfd
 reviews only what changed and resolves its own threads the author fixed. `rtfd validate` checks the
 config, the tokens and exactly what the agent loads. Starting `serve` at logon (`install-service`)
@@ -33,6 +33,8 @@ posted when you're happy with it.
   short allowlist of environment variables (`PATH`, your profile folders, the temp folder), so a
   login is what works. An `ANTHROPIC_API_KEY` set only in your environment doesn't reach it.
 - **A GitHub token that can read your repo.** The easiest is the GitHub CLI's: `gh auth token`.
+  On Azure DevOps, the Azure CLI logged in to your organization's tenant, or a PAT (see
+  [On Azure DevOps](#on-azure-devops)).
 
 Tested on Windows 11 with Claude Code 2.1.296 and git 2.47.
 
@@ -278,6 +280,34 @@ write. rtfd re-reads it on every run, so edit it and run the same PR again until
 like one you'd post. rtfd adds its own part after it: where the inputs are, and the format of the
 answer. Each printout names the prompt's hash, so you can tell which version produced which tone.
 
+### On Azure DevOps
+
+Azure DevOps Services repos work the same way, with a few differences in the config:
+
+```yaml
+  - name: web-app
+    provider: azure_devops
+    repo: contoso/Fabrikam Fiber/web-app   # organization/project/repository, spaces and all
+    trust: trusted
+    agent: claude
+    prompt: prompts/review.md
+    authors: [ada@contoso.com]             # sign-in names, as Azure DevOps shows them
+    verdicts: [comment, approve, request_changes]
+    auth: azure_cli                        # instead of token_env
+    tenant: contoso.onmicrosoft.com        # your organization's tenant, if it isn't az's default
+```
+
+- **The token.** With `auth: azure_cli`, rtfd asks the Azure CLI for an Entra ID token itself
+  (`az account get-access-token`), keeps it in memory and asks again before it expires, so `serve`
+  keeps going for days. Log in once with `az login --tenant <tenant>`. If your organization lets you
+  make PATs, `token_env: ADO_TOKEN` with a PAT that can read code and write pull request threads
+  works too.
+- **The review** is a summary comment (posted resolved, so it never holds a PR whose policy wants
+  every comment resolved) and a thread per inline comment. A crash halfway through posts only what
+  didn't land.
+- **The verdict is a vote**: approve is "Approved", request changes "Waiting for author". Never on
+  your own PR, and never on a draft, which Azure DevOps doesn't allow.
+
 ### Where things go
 
 Everything rtfd writes lives under its data folder: the home, unless `data_dir` in the config
@@ -311,6 +341,8 @@ points elsewhere.
 | `rtfd serve is not responding` | It holds the lock but stopped writing its heartbeat: stop it and start it again |
 | `stopped: ... rtfd resume <repo>` | Fix what it says, then `rtfd resume <repo>` |
 | `not watched until serve restarts` | A token is missing or refused: fix it and restart serve |
+| `the Azure CLI ... gave no token` | Run `az login --tenant <tenant>`; serve picks it up on its next try, no restart |
+| `Azure DevOps refused the token ... sign-in page` | The token is for another tenant: set `tenant` to your organization's |
 
 ---
 
@@ -324,7 +356,7 @@ steer an agent that held a token with write access. rtfd solves them once.
 
 ## What it does
 
-- **Watches PRs** on GitHub (Bitbucket next), waits for the pushes to settle and for CI to finish, and
+- **Watches PRs** on GitHub and Azure DevOps (Bitbucket next), waits for the pushes to settle and for CI to finish, and
   starts one review per new head.
 - **Runs your agent read-only** on a checkout of the PR, with the diff, the CI state and the open
   review threads handed to it as files.
@@ -395,10 +427,12 @@ each one is in the spec.
 
 - **v0: GitHub + Claude Code.** Built dry-run first: `rtfd run --dry-run` end to end against real
   PRs, then `validate`, posting, follow-ups, `serve` and the service.
+- **Azure DevOps**, ahead of v1: the same reviews on Azure DevOps Services, with tokens from the
+  Azure CLI. Built.
 - **v1: Bitbucket + Copilot CLI.** Plus other reviewers' threads as context, and notifications
   through rtfc.
 - **Later:** pre-review hooks (build, browser checks), an untrusted tier for public repos open to
-  anyone, code suggestions, webhooks, GitLab and Azure DevOps.
+  anyone, code suggestions, webhooks, GitLab.
 
 Phases and exit criteria are in [`docs/plan.md`](docs/plan.md).
 

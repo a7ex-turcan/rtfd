@@ -1,0 +1,11 @@
+{
+  "id": 4,
+  "parentCommentId": 1,
+  "author": { "displayName": "Rae Viewer", "id": "6f1b2a3c-1d4e-4f50-8a6b-7c8d9e0f1a21", "uniqueName": "reviewer@contoso.com" },
+  "content": "Looks good now.",
+  "publishedDate": "2026-10-21T08:10:00.2Z",
+  "lastUpdatedDate": "2026-10-21T08:10:00.2Z",
+  "lastContentUpdatedDate": "2026-10-21T08:10:00.2Z",
+  "commentType": "text",
+  "usersLiked": []
+}

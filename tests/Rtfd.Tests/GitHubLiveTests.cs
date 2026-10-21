@@ -3,6 +3,7 @@ using Rtfd.Git;
 using Rtfd.Posting;
 using Rtfd.Providers;
 using Rtfd.Providers.GitHub;
+using Rtfd.Tests.Support;
 
 namespace Rtfd.Tests;
 
@@ -21,7 +22,7 @@ public sealed class GitHubLiveTests
         Assert.SkipUnless(Environment.GetEnvironmentVariable("RTFD_LIVE_GITHUB") == "1", "set RTFD_LIVE_GITHUB=1 to post to the sandbox repo");
         var token = Environment.GetEnvironmentVariable("GH_TOKEN");
         Assert.SkipWhen(string.IsNullOrEmpty(token), "GH_TOKEN isn't set");
-        return new GitHubProvider(Sandbox, new ProviderToken(token!));
+        return new GitHubProvider(Sandbox, TestTokens.Fixed(token!));
     }
 
     [Fact]
@@ -64,9 +65,9 @@ public sealed class GitHubLiveTests
         var root = Assert.Single(await provider.ListReviewCommentsAsync(1, cancel), c => c.ReviewId == posted.Id);
 
         var reply = await provider.ReplyAsync(1, root.Id, "Looks good now.", cancel);
-        var thread = (await provider.GetReviewThreadsAsync(1, cancel)).Single(t => t.Comments[0].Id.ToString(System.Globalization.CultureInfo.InvariantCulture) == root.Id);
-        await provider.ResolveThreadAsync(thread.Id, cancel);
-        await provider.ResolveThreadAsync(thread.Id, cancel);
+        var thread = (await provider.GetReviewThreadsAsync(1, cancel)).Single(t => t.Comments[0].Id == root.Id);
+        await provider.ResolveThreadAsync(1, thread.Id, cancel);
+        await provider.ResolveThreadAsync(1, thread.Id, cancel);
         var after = (await provider.GetReviewThreadsAsync(1, cancel)).Single(t => t.Id == thread.Id);
 
         Assert.Equal((26, root.Id), (root.OriginalLine, reply.InReplyTo));

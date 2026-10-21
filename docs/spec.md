@@ -2,7 +2,7 @@
 
 **rtfd**: Read The Fine Diff. For the client deck: Review The Full Diff. It sits next to rtfq (databases), rtfm (docs) and rtfc (relay between sessions). It watches pull requests, hands each change to whichever AI agent you configure, and posts the review back to the PR. On a clean pass it says "lgtfm".
 
-Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe, with follow-ups), `rtfd retry`, `rtfd serve`, `rtfd status` and `rtfd pause`/`resume` exist; `install-service` is next.
+Status: design settled for v0, being built in the order of [`plan.md`](plan.md). `rtfd validate`, `rtfd run` (posting once, crash-safe, with follow-ups), `rtfd retry`, `rtfd serve`, `rtfd status` and `rtfd pause`/`resume` exist, for GitHub and, ahead of v1, Azure DevOps (decision 69); `install-service` is next.
 
 **How to read this doc.** The sections up to "Scope" describe the current design. "Decisions taken" is the log of how it got there; entries replaced by later ones are marked. Where the two disagree, the design sections win.
 
@@ -201,6 +201,8 @@ If validation fails for any other reason, the run counts as `invalid`: retry wit
 - on GitHub, a marker in the review body doesn't reach the inline comments that start the threads;
 - Bitbucket Cloud may render a `<!-- -->` comment as visible text, which breaks lesson 9.
 
+On Azure DevOps comment ids count from 1 in each thread, so rtfd names a thread by the thread's id, and a reply by `thread.comment`.
+
 **No duplicate reviews.** The state store is written ahead of the post:
 1. Before posting, rtfd records "run 7 posting for SHA abc123", with the time and **a hash of every body it is about to post** (the summary, each inline comment, each reply).
 2. It posts the review.
@@ -208,15 +210,17 @@ If validation fails for any other reason, the run counts as `invalid`: retry wit
 
 If rtfd crashes between steps 1 and 3, the next run sees the unfinished record. It lists comments by the posting identity since that time, and **matches them by body hash**. Matching by author and time alone isn't enough: on GitHub the posting identity is the repo owner, who also comments by hand, and on Bitbucket it is a shared automation account other tools may post as. Found means the review landed: record its ids and stop. Not found means post again.
 
+**Where a review isn't one request** (Azure DevOps, later Bitbucket), step 2 is a request per thread: the summary first, then each inline comment, then the vote, and step 3 records each id as it comes back. After a crash the bodies with an id are done, the rest are looked for by hash, and only what isn't found is posted: two of five comments landed means three are posted, never five (decision 71).
+
 **Confirming the post.** After posting, rtfd reads the review back and confirms it is there, with its inline comments.
 
-**A lost state store.** On GitHub, the review body carries a hidden marker (`<!-- rtfd sha=abc123 base=def456 run=7 -->`: the head and its merge base), and the PR's review comments name the review they belong to, so rtfd can rebuild its thread list and its last review from the provider when the store doesn't know a PR. The severity comes from the comment's leading word (Should / Could / MINOR). Which threads rtfd resolved itself can't be rebuilt: a thread already resolved counts as resolved by rtfd, so it is never reported as a hand resolve. Where nothing can be rebuilt (Bitbucket), rtfd's older threads are treated like other people's threads: read-only input, never resolved by rtfd.
+**A lost state store.** On GitHub, the review body carries a hidden marker (`<!-- rtfd sha=abc123 base=def456 run=7 -->`: the head and its merge base), and the PR's review comments name the review they belong to, so rtfd can rebuild its thread list and its last review from the provider when the store doesn't know a PR. On Azure DevOps the summary thread carries the same marker, and each inline thread names its summary thread in a thread property (`rtfd.review`) the page never shows. The severity comes from the comment's leading word (Should / Could / MINOR). Which threads rtfd resolved itself can't be rebuilt: a thread already resolved counts as resolved by rtfd, so it is never reported as a hand resolve. Where nothing can be rebuilt (Bitbucket), rtfd's older threads are treated like other people's threads: read-only input, never resolved by rtfd.
 
 ## Architecture
 
 ```
             +----------------+       +------------------+
- config --> |   scheduler    | ----> | provider adapter |  GitHub, Bitbucket (later GitLab, Azure DevOps)
+ config --> |   scheduler    | ----> | provider adapter |  GitHub, Azure DevOps, Bitbucket (later GitLab)
             | (one process)  |       |  list / diff /   |
             +-------+--------+       |  checks / post / |
                     |                |  reply / resolve |
@@ -245,15 +249,15 @@ If rtfd crashes between steps 1 and 3, the next run sees the unfinished record. 
 
 **Provider adapter.** It lists open PRs, with author, draft flag, fork flag and head commit. It also provides:
 - the diff, the checks, and all review threads with their author and resolution state, including who resolved them;
-- posting one review with inline comments, and returning the ids of everything it created;
+- posting one review with inline comments, and returning the ids of everything it created; where the provider has no review object (Azure DevOps), a thread at a time and the vote apart;
 - replying to and resolving a thread;
 - comments by a given identity since a given time, with their bodies, for the write-ahead check;
 - whoami, for the self-review check and for recognising its own threads;
 - the repo's visibility (public or private), for the config checks;
-- the clone URL and the ref to fetch the PR head from (GitHub has `refs/pull/N/head`; Bitbucket has the source branch, or the fork's);
-- on GitHub: the reviews carrying rtfd's marker and their inline comments, for rebuilding a lost store.
+- the clone URL and the ref to fetch the PR head from (GitHub has `refs/pull/N/head`; Azure Repos has no head ref, but serves the head commit by its SHA; Bitbucket has the source branch, or the fork's);
+- on GitHub and Azure DevOps: the reviews carrying rtfd's marker and their inline comments, for rebuilding a lost store.
 
-Each provider has its own quirks. For example, Bitbucket's comment list doesn't reliably report whether a thread is resolved, so each thread has to be checked through the single-comment endpoint. And inline anchors (`to`/`from` on Bitbucket, `line`/`side` on GitHub) differ between providers.
+Each provider has its own quirks. For example, Bitbucket's comment list doesn't reliably report whether a thread is resolved, so each thread has to be checked through the single-comment endpoint. Azure DevOps keeps CI as the PR's build policies and statuses, not per commit, and its thread statuses (active, fixed, closed and so on) are the resolution. And inline anchors (`to`/`from` on Bitbucket, `line`/`side` on GitHub, a file position per side and the iteration on Azure DevOps) differ between providers.
 
 **Change detector.** Triggers on a new PR or new commits; CI only decides when (decision 60). It consumes events, so polling feeds it today and webhooks can feed it later. Before a review it waits for two things, separately:
 - **Quiet period:** no new pushes for `quiet_period`, so five quick pushes produce one review, not five. Only pushes reset it.
@@ -318,7 +322,7 @@ SQLite (decision 49).
 - read-only context tools to offer the agent, if any;
 - path excludes and the diff size cap;
 - pre-review hooks (trusted repos only);
-- the posting identity, as a token env var name, never the value.
+- the posting identity, as a token env var name, never the value, or on Azure DevOps the Azure CLI (decision 70).
 
 rtfd refuses to start a repo whose config contradicts itself:
 - `authors: ["*"]` on a public repo (visibility from the provider), while the untrusted tier doesn't exist;
@@ -391,6 +395,17 @@ repos:
     verdicts: [comment]               # GitHub forbids self-approval and self-request-changes
     token_env: GH_TOKEN
 
+  - name: fabrikam-web
+    provider: azure_devops
+    repo: contoso/Fabrikam Fiber/web-app  # organization/project/repository
+    trust: trusted
+    agent: claude
+    prompt: prompts/review.md
+    authors: [author@contoso.com]     # Azure DevOps sign-in names
+    verdicts: [comment, approve, request_changes]   # votes 10 and -5; never on your own PR or a draft
+    auth: azure_cli                   # instead of token_env: an Entra ID token from `az`, renewed before it expires
+    tenant: contoso.onmicrosoft.com   # the organization's tenant, when it isn't az's default
+
   - name: work-ui
     provider: bitbucket
     repo: workspace/some-ui
@@ -449,6 +464,11 @@ The full list is two to three weeks of work, so it ships in steps. Each step rep
 5. **`serve`:** the change detector (quiet period, CI wait), the scheduler, usage-limit pauses, `status`, `retry`, `pause/resume`.
 6. **`install-service`**, then retire the personal-machine scripts.
 
+**Azure DevOps, ahead of v1** (the owner, 2026-10-21; decision 69). Everything v0 does, on Azure DevOps Services:
+- the provider: PRs, CI from build policies and statuses, threads, the head fetched by SHA;
+- posting a thread at a time, crash-safe body by body, and votes;
+- tokens from the Azure CLI, renewed, as well as a PAT in a variable.
+
 **v1: Bitbucket + Copilot.** Replaces the work watchers that don't need a browser check.
 - the Bitbucket provider (thread resolution via the single-comment endpoint; no marker, so no store rebuild);
 - the copilot agent adapter, with its isolation and permission flags verified on the installed version;
@@ -465,7 +485,7 @@ The full list is two to three weeks of work, so it ships in steps. Each step rep
 - "bring your own runner": emit a job that an open session picks up through rtfc;
 - two agents on one PR with merged findings;
 - cost and token tracking per review;
-- GitLab and Azure DevOps.
+- GitLab, and Azure DevOps Server (self-hosted).
 
 ## Decisions taken
 
@@ -569,6 +589,14 @@ From building Phase 5:
 66. **Polls are conditional requests.** The PR list, the check runs and the commit status are asked with the last answer's ETag; GitHub's 304 doesn't count against the rate limit (checked on 2026-10-15). CI is asked again on every tick until it settles.
 67. **A failing PR backs off on its own.** After a transient failure, or a post that may not have landed, a PR waits the interval, then twice that, up to an hour; a new head starts over. A failing poll backs the repo off the same way.
 68. **One review per tick, then a fresh poll.** A review can take half an hour, and a push may land meanwhile, so after a review the repo polls again at once instead of reviewing the next PR from a stale list.
+
+From building Azure DevOps:
+
+69. **Azure DevOps comes before v1**, as the owner asked on 2026-10-21, with everything v0 does: `run`, `serve`, `validate`, follow-ups, crash recovery. It is Azure DevOps Services (`dev.azure.com`); a repo is `organization/project/repository`, and the posting identity is the token's sign-in name, which PR and comment authors carry too, so `authors` lists sign-in names.
+70. **Tokens can come from the Azure CLI** (`auth: azure_cli`, with the organization's `tenant`), the owner's call on 2026-10-21. Some organizations issue only packaging-scoped PATs, and an Entra ID token lasts about an hour, so a variable read once can't keep `serve` going. rtfd runs `az account get-access-token` for Azure DevOps' resource itself, keeps the token in memory, and runs it again five minutes before it expires; a 401 gets one renewal and a retry. A CLI that isn't logged in backs the repo off instead of stopping it until a restart, since logging in again fixes it (refines 64). A PAT in `token_env` works too.
+71. **A review a thread at a time.** Azure DevOps has no review object: rtfd posts the summary as a closed thread (it asks nothing of the author, and a comment policy would otherwise hold the PR), then each inline comment as an active thread on the reviewed head's iteration, naming the summary thread in its `rtfd.review` property, then the vote. Every id is recorded as it comes back; after a crash the rest are found by hash or posted, so a crash after two of five comments posts the other three. A comment Azure DevOps refuses doesn't stop the rest, and the outcome says which one didn't land. Phase 7's Bitbucket needs the same.
+72. **Verdicts are votes on Azure DevOps**, as the owner chose on 2026-10-21: approve is 10, request changes -5 (waiting for the author), and a comment leaves the vote alone. Never on the posting identity's own PR (decision 18), and never on a draft, which Azure DevOps refuses ("You cannot vote on draft pull requests", checked 2026-10-21).
+73. **What Azure DevOps answers differently.** The head is fetched by SHA, since Azure Repos has `refs/pull/N/merge` but no head ref, and serves any commit, a deleted branch's too. CI is the PR's build policies plus the newest status of each name for the iteration that pushed the head; a build that ran on an older head is pending, and one only queued by hand that never ran isn't waited for. Its reads carry no ETags, so polls aren't conditional (decision 66 is GitHub's); at serve's intervals that is cheap. A wrong tenant or an expired token gets a sign-in page, not a 401, and rtfd counts it as one.
 
 ## Open questions
 

@@ -36,17 +36,31 @@ public sealed class FakeThread
     public bool IsOutdated { get; set; }
     public List<ThreadComment> Comments { get; } = [];
 
-    public string RootId => Comments[0].Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public string RootId => Comments[0].Id;
 }
 
 /// <summary>
 /// A provider that serves one PR from a <see cref="GitFixture"/>, with whatever CI and identity a
 /// test sets. It keeps reviews, comments and threads the way GitHub does: every inline comment
-/// starts a thread, and every reply gets an empty review of its own.
+/// starts a thread, and every reply gets an empty review of its own. Set <see cref="Posting"/> to
+/// <see cref="ReviewPosting.PerThread"/> and it takes reviews the way Azure DevOps does: a summary
+/// thread, a thread per inline comment naming it, and a vote apart.
 /// </summary>
 public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : IProvider
 {
     private int _nextId = 1000;
+
+    public ReviewPosting Posting { get; set; } = ReviewPosting.Atomic;
+
+    /// <summary>A failure for the nth thread started, counted from 1 over the provider's life (per-thread posting).</summary>
+    public Dictionary<int, PostFailure> ThreadFailures { get; } = [];
+
+    public int ThreadCalls { get; private set; }
+
+    /// <summary>The posting identity's vote, per-thread posting: what <see cref="SetVoteAsync"/> set.</summary>
+    public Verdict? Vote { get; set; }
+
+    public int VoteCalls { get; private set; }
 
     /// <summary>The PR as the provider has it now; a test moves its head after a push.</summary>
     public PullRequest PullRequest { get; set; } = pullRequest;
@@ -80,18 +94,26 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
     public string Identity { get; set; } = "someone-else";
     public CiState Ci { get; set; } = new(CiSummary.None, []);
 
-    /// <summary>The token rtfd handed over, so a test can check it arrived and went nowhere else.</summary>
+    /// <summary>The token rtfd's source held when it made the provider, so a test can check it arrived and went nowhere else.</summary>
     public ProviderToken? Token { get; set; }
+
+    /// <summary>A token source the fake asks before each read of the PRs, as a real provider asks before each request.</summary>
+    public TokenSource? Source { get; set; }
 
     public Task<string> WhoAmIAsync(CancellationToken cancellationToken = default) => Task.FromResult(Identity);
 
     public Task<RepositoryInfo> GetRepositoryAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new RepositoryInfo(false, "main"));
 
-    public Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(CancellationToken cancellationToken = default)
     {
+        if (Source is not null)
+        {
+            await Source.GetAsync(cancellationToken: cancellationToken);
+        }
+
         ListCalls++;
-        return Task.FromResult<IReadOnlyList<PullRequest>>(Closed ? [] : [PullRequest]);
+        return Closed ? [] : [PullRequest];
     }
 
     public Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default)
@@ -105,7 +127,7 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         return Task.FromResult(PullRequest);
     }
 
-    public Task<CiState> GetCiStateAsync(string sha, CancellationToken cancellationToken = default) => Task.FromResult(Ci);
+    public Task<CiState> GetCiStateAsync(int number, string sha, CancellationToken cancellationToken = default) => Task.FromResult(Ci);
 
     public Task<IReadOnlyList<ReviewThread>> GetReviewThreadsAsync(int number, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ReviewThread>>([.. Threads.Select(t => new ReviewThread
@@ -119,7 +141,8 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
             Comments = [.. t.Comments],
         })]);
 
-    public FetchSource FetchSource(PullRequest pr) => new(origin.Origin, $"refs/heads/{pr.HeadRef}", null);
+    public Task<FetchSource> FetchSourceAsync(PullRequest pr, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new FetchSource(origin.Origin, $"refs/heads/{pr.HeadRef}", null));
 
     public Task<PostedReview> PostReviewAsync(ReviewPost post, CancellationToken cancellationToken = default)
     {
@@ -148,7 +171,7 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         {
             Comments.Add(new ReviewComment(comment.Id, Identity, id, null, comment.Path, comment.Line, comment.Line, comment.Body, DateTimeOffset.UtcNow));
             var thread = new FakeThread { Id = $"PRRT_{comment.Id}", Path = comment.Path, Line = comment.Line, OriginalLine = comment.Line };
-            thread.Comments.Add(new ThreadComment(long.Parse(comment.Id, System.Globalization.CultureInfo.InvariantCulture), Identity, comment.Body, DateTimeOffset.UtcNow));
+            thread.Comments.Add(new ThreadComment(comment.Id, Identity, comment.Body, DateTimeOffset.UtcNow));
             Threads.Add(thread);
         }
 
@@ -160,8 +183,71 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         };
     }
 
-    public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Reviews.FirstOrDefault(r => r.Id == reviewId));
+    /// <summary>Per-thread posting: the summary, or an inline comment that starts a thread naming it.</summary>
+    public Task<PostedComment> StartThreadAsync(ThreadPost post, CancellationToken cancellationToken = default)
+    {
+        ThreadCalls++;
+        var failure = ThreadFailures.GetValueOrDefault(ThreadCalls);
+        switch (failure)
+        {
+            case PostFailure.CrashBeforePost:
+                throw new SimulatedCrash("before a thread");
+            case PostFailure.Reject:
+                throw new ProviderException("Azure DevOps answered 400 to the thread: the position is outside the file", 400);
+        }
+
+        var id = NextId();
+        PostedComment posted;
+        if (post.Inline is not { } inline)
+        {
+            Reviews.Add(new PostedReview(id, Identity, "COMMENTED", post.Body, null, DateTimeOffset.UtcNow, $"https://dev.azure.com/org/project/_git/repo/pullrequest/{post.Number}?discussionId={id}", []));
+            posted = new PostedComment(id, "", null, post.Body) { Url = Reviews[^1].Url };
+        }
+        else
+        {
+            Comments.Add(new ReviewComment(id, Identity, post.ReviewId, null, inline.Path, inline.Line, inline.Line, post.Body, DateTimeOffset.UtcNow));
+            var thread = new FakeThread { Id = id, Path = inline.Path, Line = inline.Line, OriginalLine = inline.Line };
+            thread.Comments.Add(new ThreadComment(id, Identity, post.Body, DateTimeOffset.UtcNow));
+            Threads.Add(thread);
+            posted = new PostedComment(id, inline.Path, inline.Line, post.Body);
+        }
+
+        return failure switch
+        {
+            PostFailure.CrashAfterPost => throw new SimulatedCrash("after a thread"),
+            PostFailure.BadGatewayButLanded => throw new ProviderException("Azure DevOps answered 502", 502) { MayHaveLanded = true },
+            _ => Task.FromResult(posted),
+        };
+    }
+
+    public Task SetVoteAsync(int number, Verdict verdict, CancellationToken cancellationToken = default)
+    {
+        VoteCalls++;
+        Vote = verdict;
+        return Task.CompletedTask;
+    }
+
+    public Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default)
+    {
+        var review = Reviews.FirstOrDefault(r => r.Id == reviewId);
+        if (review is null || Posting == ReviewPosting.Atomic)
+        {
+            return Task.FromResult(review);
+        }
+
+        // Per-thread: the summary, the threads that name it, and the vote as the state.
+        var state = Vote switch
+        {
+            Verdict.Approve => "APPROVED",
+            Verdict.RequestChanges => "CHANGES_REQUESTED",
+            _ => "COMMENTED",
+        };
+        return Task.FromResult<PostedReview?>(review with
+        {
+            State = state,
+            Comments = [.. Comments.Where(c => c.ReviewId == reviewId && c.InReplyTo is null).Select(c => new PostedComment(c.Id, c.Path, c.Line, c.Body))],
+        });
+    }
 
     public Task<IReadOnlyList<PostedReview>> ListReviewsAsync(int number, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<PostedReview>>([.. Reviews.Select(r => r with { Comments = [] })]);
@@ -181,10 +267,14 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         var thread = Threads.FirstOrDefault(t => t.RootId == commentId)
             ?? throw new ProviderException($"GitHub has no comment {commentId} (404)", 404);
         var id = NextId();
-        var reply = new ReviewComment(id, Identity, NextId(), commentId, thread.Path, thread.Line, thread.OriginalLine, body, DateTimeOffset.UtcNow);
-        Reviews.Add(new PostedReview(reply.ReviewId!, Identity, "COMMENTED", "", PullRequest.HeadSha, DateTimeOffset.UtcNow, null, []));
+        var reply = new ReviewComment(id, Identity, Posting == ReviewPosting.Atomic ? NextId() : null, commentId, thread.Path, thread.Line, thread.OriginalLine, body, DateTimeOffset.UtcNow);
+        if (Posting == ReviewPosting.Atomic)
+        {
+            Reviews.Add(new PostedReview(reply.ReviewId!, Identity, "COMMENTED", "", PullRequest.HeadSha, DateTimeOffset.UtcNow, null, []));
+        }
+
         Comments.Add(reply);
-        thread.Comments.Add(new ThreadComment(long.Parse(id, System.Globalization.CultureInfo.InvariantCulture), Identity, body, DateTimeOffset.UtcNow));
+        thread.Comments.Add(new ThreadComment(id, Identity, body, DateTimeOffset.UtcNow));
 
         return failure switch
         {
@@ -194,7 +284,7 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         };
     }
 
-    public Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default)
+    public Task ResolveThreadAsync(int number, string threadId, CancellationToken cancellationToken = default)
     {
         ResolveCalls++;
         var thread = Threads.FirstOrDefault(t => t.Id == threadId)
@@ -212,14 +302,14 @@ public sealed class FakeProvider(GitFixture origin, PullRequest pullRequest) : I
         var id = NextId();
         Comments.Add(new ReviewComment(id, author, NextId(), null, path, line, line, body, DateTimeOffset.UtcNow));
         var thread = new FakeThread { Id = $"PRRT_{id}", Path = path, Line = line, OriginalLine = line };
-        thread.Comments.Add(new ThreadComment(long.Parse(id, System.Globalization.CultureInfo.InvariantCulture), author, body, DateTimeOffset.UtcNow));
+        thread.Comments.Add(new ThreadComment(id, author, body, DateTimeOffset.UtcNow));
         Threads.Add(thread);
         return id;
     }
 
     /// <summary>A comment on the thread <paramref name="commentId"/> starts, by someone.</summary>
     public void Reply(string commentId, string author, string body) =>
-        Threads.Single(t => t.RootId == commentId).Comments.Add(new ThreadComment(long.Parse(NextId(), System.Globalization.CultureInfo.InvariantCulture), author, body, DateTimeOffset.UtcNow));
+        Threads.Single(t => t.RootId == commentId).Comments.Add(new ThreadComment(NextId(), author, body, DateTimeOffset.UtcNow));
 
     private string NextId() => (_nextId++).ToString(System.Globalization.CultureInfo.InvariantCulture);
 

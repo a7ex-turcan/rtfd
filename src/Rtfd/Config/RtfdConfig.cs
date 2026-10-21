@@ -4,6 +4,17 @@ public enum ProviderKind
 {
     GitHub,
     Bitbucket,
+    AzureDevOps,
+}
+
+/// <summary>Where a repo's token comes from.</summary>
+public enum TokenAuth
+{
+    /// <summary>The variable <c>token_env</c> names, read once.</summary>
+    Environment,
+
+    /// <summary>The Azure CLI, asked again before each token expires (<c>auth: azure_cli</c>).</summary>
+    AzureCli,
 }
 
 public enum TrustTier
@@ -123,7 +134,7 @@ public sealed record RepoConfig
 
     public required ProviderKind Provider { get; init; }
 
-    /// <summary><c>owner/name</c> on the provider.</summary>
+    /// <summary><c>owner/name</c> on GitHub, <c>organization/project/repository</c> on Azure DevOps.</summary>
     public required string Slug { get; init; }
 
     public required TrustTier Trust { get; init; }
@@ -135,8 +146,18 @@ public sealed record RepoConfig
     public required IReadOnlyList<string> Authors { get; init; }
     public required IReadOnlyList<Verdict> Verdicts { get; init; }
 
-    /// <summary>The name of the variable holding the posting identity's token, never the token.</summary>
-    public required string TokenEnv { get; init; }
+    public TokenAuth Auth { get; init; } = TokenAuth.Environment;
+
+    /// <summary>The name of the variable holding the posting identity's token, never the token. Null with <c>auth: azure_cli</c>.</summary>
+    public string? TokenEnv { get; init; }
+
+    /// <summary>The Entra tenant the Azure CLI gets the token from, or null for its default.</summary>
+    public string? Tenant { get; init; }
+
+    /// <summary>Where the token comes from, for what rtfd tells people: the variable's name, or the Azure CLI.</summary>
+    public string TokenFrom => Auth == TokenAuth.AzureCli
+        ? $"the Azure CLI{(Tenant is { } tenant ? $" (tenant {tenant})" : "")}"
+        : TokenEnv ?? "token_env";
 
     public required IReadOnlyList<HookConfig> Hooks { get; init; }
     public required RepoSettings Settings { get; init; }

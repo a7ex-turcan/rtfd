@@ -15,53 +15,12 @@ public sealed class GitHubProviderTests
     private static string Recording(string name) =>
         File.ReadAllText(Path.Combine(Configs.RepositoryRoot, "tests", "Rtfd.Tests", "Recordings", "github", name));
 
-    /// <summary>Answers from a queue per path, and keeps every request for the assertions.</summary>
-    private sealed class Handler : HttpMessageHandler
+    private static (GitHubProvider Provider, RecordedHandler Handler, string Token, List<TimeSpan> Waits) Create(string slug = "a7ex-turcan/nutrx")
     {
-        private readonly Dictionary<string, Queue<Func<HttpResponseMessage>>> _answers = new(StringComparer.Ordinal);
-
-        public List<(HttpRequestMessage Request, string? Body)> Requests { get; } = [];
-
-        public Handler On(string pathAndQuery, HttpStatusCode status, string body, params (string Name, string Value)[] headers)
-        {
-            if (!_answers.TryGetValue(pathAndQuery, out var queue))
-            {
-                _answers[pathAndQuery] = queue = new();
-            }
-
-            queue.Enqueue(() =>
-            {
-                var response = new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
-                foreach (var (name, value) in headers)
-                {
-                    response.Headers.TryAddWithoutValidation(name, value);
-                }
-
-                return response;
-            });
-            return this;
-        }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Requests.Add((request, request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken)));
-            var key = request.RequestUri!.PathAndQuery;
-            if (!_answers.TryGetValue(key, out var queue) || queue.Count == 0)
-            {
-                return new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("""{"message": "Not Found"}""") };
-            }
-
-            var answer = queue.Count > 1 ? queue.Dequeue() : queue.Peek();
-            return answer();
-        }
-    }
-
-    private static (GitHubProvider Provider, Handler Handler, string Token, List<TimeSpan> Waits) Create(string slug = "a7ex-turcan/nutrx")
-    {
-        var handler = new Handler();
+        var handler = new RecordedHandler();
         var token = Tokens.GitHubLike();
         var waits = new List<TimeSpan>();
-        var provider = new GitHubProvider(slug, new ProviderToken(token), handler, (wait, _) =>
+        var provider = new GitHubProvider(slug, TestTokens.Fixed(token), handler, (wait, _) =>
         {
             waits.Add(wait);
             return Task.CompletedTask;
@@ -108,7 +67,7 @@ public sealed class GitHubProviderTests
         handler.On($"/repos/a7ex-turcan/rtfd/commits/{sha}/check-runs?per_page=100", HttpStatusCode.OK, Recording("check-runs.json"));
         handler.On($"/repos/a7ex-turcan/rtfd/commits/{sha}/status?per_page=100", HttpStatusCode.OK, Recording("status.json"));
 
-        var ci = await provider.GetCiStateAsync(sha, TestContext.Current.CancellationToken);
+        var ci = await provider.GetCiStateAsync(12, sha, TestContext.Current.CancellationToken);
 
         Assert.Equal(CiSummary.Success, ci.Summary);
         Assert.Equal(["aot", "build (ubuntu-latest)", "build (windows-latest)"], ci.Checks.Select(c => c.Name).Order(StringComparer.Ordinal));
@@ -126,8 +85,8 @@ public sealed class GitHubProviderTests
         handler.On(status, HttpStatusCode.OK, Recording("status.json"), ("ETag", "W/\"status-1\""))
             .On(status, HttpStatusCode.NotModified, "");
 
-        var first = await provider.GetCiStateAsync(sha, TestContext.Current.CancellationToken);
-        var second = await provider.GetCiStateAsync(sha, TestContext.Current.CancellationToken);
+        var first = await provider.GetCiStateAsync(12, sha, TestContext.Current.CancellationToken);
+        var second = await provider.GetCiStateAsync(12, sha, TestContext.Current.CancellationToken);
 
         Assert.Equal(first.Checks, second.Checks);
         Assert.Equal(CiSummary.Success, second.Summary);
@@ -211,7 +170,7 @@ public sealed class GitHubProviderTests
         var (provider, handler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
         handler.On("/graphql", HttpStatusCode.OK, Recording("resolve.json"));
 
-        await provider.ResolveThreadAsync("PRRT_kwDOVHP2386r8isI", TestContext.Current.CancellationToken);
+        await provider.ResolveThreadAsync(1, "PRRT_kwDOVHP2386r8isI", TestContext.Current.CancellationToken);
 
         var body = handler.Requests.Single().Body!;
         Assert.Contains("resolveReviewThread(input: {threadId: $id})", body, StringComparison.Ordinal);
@@ -219,7 +178,7 @@ public sealed class GitHubProviderTests
 
         var (missing, missingHandler, _, _) = Create("a7ex-turcan/rtfd-sandbox");
         missingHandler.On("/graphql", HttpStatusCode.OK, Recording("resolve-not-found.json"));
-        var error = await Assert.ThrowsAsync<ProviderException>(() => missing.ResolveThreadAsync("PRRT_doesnotexist", TestContext.Current.CancellationToken));
+        var error = await Assert.ThrowsAsync<ProviderException>(() => missing.ResolveThreadAsync(1, "PRRT_doesnotexist", TestContext.Current.CancellationToken));
         Assert.Contains("Could not resolve to a node", error.Message, StringComparison.Ordinal);
     }
 
@@ -263,12 +222,12 @@ public sealed class GitHubProviderTests
     }
 
     [Fact]
-    public void The_fetch_credential_is_basic_auth_for_git_and_prints_as_a_placeholder()
+    public async Task The_fetch_credential_is_basic_auth_for_git_and_prints_as_a_placeholder()
     {
         var (provider, _, token, _) = Create();
         var pr = FakeProvider.Pr(new string('a', 40), number: 12);
 
-        var source = provider.FetchSource(pr);
+        var source = await provider.FetchSourceAsync(pr, TestContext.Current.CancellationToken);
 
         Assert.Equal("https://github.com/a7ex-turcan/nutrx.git", source.Url);
         Assert.Equal("refs/pull/12/head", source.HeadRef);

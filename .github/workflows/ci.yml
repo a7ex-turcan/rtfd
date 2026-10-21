@@ -88,6 +88,24 @@ jobs:
           # The runner exits with the last native exit code, which is the refusal above.
           exit 0
 
+      - name: The published binary takes an Azure DevOps repo with its token from the Azure CLI
+        shell: pwsh
+        run: |
+          $home_ = Join-Path $env:RUNNER_TEMP rtfd-ado
+          New-Item -ItemType Directory -Force (Join-Path $home_ prompts) | Out-Null
+          Copy-Item examples/prompts/review.md (Join-Path $home_ prompts)
+          $env:RTFD_HOME = $home_
+          $repo = "  - name: web-app`n    provider: azure_devops`n    repo: contoso/Fabrikam Fiber/web-app`n    trust: trusted`n    agent: claude`n    prompt: prompts/review.md`n    authors: [ada@contoso.com]`n    verdicts: [comment, approve, request_changes]`n    auth: azure_cli`n    tenant: contoso.onmicrosoft.com`n"
+          Set-Content (Join-Path $home_ rtfd.yaml) ((Get-Content examples/rtfd.yaml -Raw) + $repo) -NoNewline
+          $out = ./publish/rtfd.exe validate --config-only | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "an Azure DevOps repo was refused:`n$out" }
+
+          # The Azure CLI's token is for Azure DevOps only.
+          Set-Content (Join-Path $home_ rtfd.yaml) ((Get-Content examples/rtfd.yaml -Raw) -replace 'token_env: GH_TOKEN', 'auth: azure_cli') -NoNewline
+          $out = ./publish/rtfd.exe validate --config-only | Out-String
+          if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.auth_unsupported') { throw "auth: azure_cli on GitHub was not refused:`n$out" }
+          exit 0
+
       - name: The published binary opens the state store
         shell: pwsh
         run: |

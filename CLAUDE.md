@@ -16,7 +16,7 @@ change, and record the reason in `docs/implementation.md`. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry`, `serve`, `status`, `pause`/`resume` and the `rtfd-git` MCP server today; `install-service` to come |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry`, `serve`, `status`, `pause`/`resume` and the `rtfd-git` MCP server today, for GitHub and Azure DevOps; `install-service` to come |
 | `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
 | `tests/FakeAgent/` | C# | A stand-in agent CLI, built as `claude`, with canned output, for tests |
 
@@ -73,8 +73,17 @@ stops the repo until `rtfd resume`. `serve.lock` keeps one serve per data direct
 `Processes/ChildProcessJob.cs` makes a killed serve take its agent with it. `rtfd status` tells
 running, stopped and hung apart from the lock and the heartbeat. Owner's calls: CI only decides when
 (no CI-change pass), config edits need a restart, and the 48 h run is on the sandbox with nutrx at
-Phase 6's switchover. Not done yet: that 48 h run. Next is Phase 6, `install-service`. Update this
-section when a phase lands.
+Phase 6's switchover. Not done yet: that 48 h run.
+
+**Phase 5b, Azure DevOps, is built** (2026-10-21, the owner's request, ahead of Phase 6 and v1).
+`Providers/AzureDevOps/` talks to Azure DevOps Services' REST API 7.1; `IProvider.Posting` says
+whether a review is one request (GitHub) or a thread at a time (Azure DevOps), and `Poster` records
+and recovers each thread on its own. Tokens come from a `TokenSource` (`Providers/TokenSource.cs`):
+the variable `token_env` names, read once, or the Azure CLI (`auth: azure_cli`), renewed five
+minutes before expiry. Verdicts are votes there. Owner's calls: tokens from the Azure CLI, test
+posts on a scratch draft PR in one of their work repos, votes. Not done yet: votes live (the scratch
+PR is a draft), and a look at how the summary renders on the PR page. Next is Phase 6,
+`install-service`. Update this section when a phase lands.
 
 ## Hard rules
 
@@ -85,9 +94,10 @@ These come from the spec's security design. Each one is cheap to keep and expens
 - Every process rtfd starts (agent, `rtfd-git`, git, later hooks) gets an environment built from an
   **allowlist**, never "rtfd's environment minus the secrets". No `token_env` value, no `CLAUDE*`
   variable, nothing not on the list.
-- Tokens are read once from the variable `token_env` names and held in memory. Never log one, put
-  one in an argument list, write one to disk or the run folder, or pass one to a child. Git gets the
-  fetch credential through `GIT_CONFIG_*` variables on the fetch command only.
+- Tokens are read once from the variable `token_env` names, or handed over by the Azure CLI
+  (`auth: azure_cli`), and held in memory. Never log one, put one in an argument list, write one to
+  disk or the run folder, or pass one to a child. az's stdout holds the token: never log it. Git gets
+  the fetch credential through `GIT_CONFIG_*` variables on the fetch command only.
 - No shell tool on any tier, and no "read-only git" allowlist: `git diff --output` writes anywhere.
   Git history reaches the agent only through `rtfd-git`'s four tools, with validated arguments and
   command lines rtfd fixes.
@@ -112,6 +122,11 @@ check included. No code path posts text that skipped it.
 
 - Development runs use `--dry-run`. Live tests post only to the sandbox repo, and only with
   `RTFD_LIVE_GITHUB=1`. The first real post to nutrx, or to any other real repo, waits for the owner.
+- On Azure DevOps the sandbox is a scratch draft PR in one of the owner's work repos, named by
+  `RTFD_ADO_SANDBOX` and `RTFD_ADO_PR`, and posted to only with `RTFD_LIVE_AZURE_DEVOPS=1`. Every
+  other PR in that organization is a real one: posts there wait for the owner, one by one.
+- This repo is public. Never commit an Azure DevOps organization's, project's or repo's names, its
+  ids or its answers. Recordings are rewritten to `contoso` (`Recordings/azure-devops/README.md`).
 - Don't stop, edit or remove the existing PowerShell watchers or their scheduled tasks on either
   machine. Phase 6 and Phase 7 retire them, with the owner.
 
@@ -169,7 +184,8 @@ Same stack and conventions as the siblings; rtfc's `AGENTS.md` is the fullest st
   CLI are opt-in: `RTFD_LIVE_CLAUDE=1` for the isolation tests, which use a scratch
   `CLAUDE_CONFIG_DIR` and stop Claude before it calls a model.
 - The provider has recorded-response tests; live tests against the sandbox repo need
-  `RTFD_LIVE_GITHUB=1`. Crash points are a seam in `FakeProvider` (`PostFailure`), so recovery is
+  `RTFD_LIVE_GITHUB=1`, and against the Azure DevOps scratch PR `RTFD_LIVE_AZURE_DEVOPS=1` (with
+  `RTFD_ADO_SANDBOX`, `RTFD_ADO_PR` and `RTFD_ADO_TENANT` or `ADO_TOKEN`). Crash points are a seam in `FakeProvider` (`PostFailure`), so recovery is
   tested by a run that dies and the next one.
 - CI runs on Windows and Linux. Windows is the primary target.
 - Name tests as sentences: `Git_tools_refuse_an_output_argument`.
@@ -261,6 +277,35 @@ Checked:
   Code (`claude.exe`) and its `rtfd git-tools` were gone three seconds later. `PosixSignalRegistration`
   for SIGINT, SIGTERM, SIGHUP and SIGQUIT registers on Windows.
 
+Checked 2026-10-21 on Azure DevOps Services (REST 7.1, Azure CLI 2.88.0), on the owner's work
+organization (read-only, then posts on the scratch draft PR):
+
+- `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --tenant <t> -o json`
+  gives `accessToken` (a JWT, about 67 minutes left), `expires_on` (Unix seconds) and `expiresOn`
+  (local time). The MSI's `az.cmd` runs `..\python.exe -IBm azure.cli`. A wrong tenant gets a 302 or a
+  203 sign-in page, not a 401.
+- The token works for REST (bearer) and for git as `http.extraHeader: AUTHORIZATION: bearer <jwt>`.
+- Azure Repos advertises only branches. `refs/pull/N/merge` exists while a PR is active;
+  `refs/pull/N/head` never does. A fetch of a commit by SHA works, a deleted branch's too.
+- `connectionData`'s `authenticatedUser.properties.Account.$value` is the sign-in name that PR
+  `createdBy.uniqueName` and comment authors carry.
+- Comment ids count from 1 in each thread. Thread status is `active`, `fixed`, `wontFix`, `closed`,
+  `byDesign` or `pending`; system threads have `commentType: system` and no status.
+  `threads?$iteration=N` tracks positions to iteration N (`trackingCriteria` keeps the original); a
+  vanished line keeps the file but loses its position.
+- A thread created with `properties: {"rtfd.review": {"$type": "System.String", "$value": ...}}`
+  reads back with it; the iteration context and change-tracking id are kept as sent. `PATCH` with
+  `status: 2` resolves as "fixed", again on a fixed thread too.
+- Build policy evaluations (`_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/<project id>/<pr>`,
+  `7.1-preview.1`) carry `lastMergeSourceCommitId`; PR statuses are a log per iteration, many per
+  name. No ETags on the PR list.
+- `GET reviewers/<id>` for someone not on the PR is a 400. A draft refuses any vote with a 400: "You
+  cannot vote on draft pull requests".
+
+Unverified for Azure DevOps: whether the summary's `<!-- rtfd ... -->` marker is hidden on the PR
+page, and how a closed summary thread shows there (the API reads both back as sent), and a vote
+round trip on a published PR.
+
 ## Open decisions
 
 Don't settle these silently in code. Raise them.
@@ -289,6 +334,9 @@ RTFD_HOME=/some/temp/home GH_TOKEN="$(gh auth token)" dotnet run --project src/R
 
 # Posting against GitHub itself, on the sandbox repo only:
 RTFD_LIVE_GITHUB=1 GH_TOKEN="$(gh auth token)" tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.GitHubLiveTests
+
+# Posting against Azure DevOps, on the scratch draft PR only (names from the owner, never committed):
+RTFD_LIVE_AZURE_DEVOPS=1 RTFD_ADO_SANDBOX=<org>/<project>/<repo> RTFD_ADO_PR=<n> RTFD_ADO_TENANT=<tenant> tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.AzureDevOpsLiveTests
 
 # The isolation tests against the installed Claude Code, with a scratch user setup (no model call):
 RTFD_LIVE_CLAUDE=1 tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.LiveClaudeIsolationTests
@@ -354,8 +402,9 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `src/Rtfd/` (Phase 1) | `Providers/` GitHub read side · `Git/` GitRunner, mirror, diff model, worktree and config reset · `Processes/` ProcessRunner, allowlisted environment · `Agents/` claude adapter, output extraction, outcomes, limit parser · `GitTools/` rtfd-git · `Review/` findings contract, validator, review builder and verdict, `Secrets/` · `Runs/` run folder, prompt, `ReviewRun`, dry-run printout |
 | `src/Rtfd/` (Phases 2 to 4) | `Agents/AgentProbe.cs` and `Config/ProviderChecks.cs` (validate) · `State/` the SQLite store and `schema.sql` · `Posting/` Poster (write-ahead posting, replies, resolves, recovery), StoreHooks (one review per head, attempts), ReviewHistory (the last review and rtfd's threads, rebuilt from markers when lost) · `Git/Interdiff.cs` · `Review/OwnThreads.cs` |
 | `src/Rtfd/` (Phase 5) | `Serve/` ServeHost (startup checks, a loop per repo, the heartbeat), RepoWatcher (one tick: flags, lock, poll, store, one review, the startup sweep), ChangeDetector, FileLock, ServeLog, StatusFile · `Runs/LiveRun.cs` (the live path of `run` and `serve`) · `Processes/ChildProcessJob.cs` · `Cli/` ServeCommand, StatusCommand, PauseCommand |
+| `src/Rtfd/` (Phase 5b) | `Providers/AzureDevOps/` (the provider and its JSON) · `Providers/TokenSource.cs` (a variable read once, the Azure CLI renewed, shared per repo) · `Providers/ProviderFactory.cs` · `Posting/Poster.cs`' per-thread path |
 | `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
-| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand) · `Recordings/github/` real GitHub answers, trimmed |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, or a thread at a time as Azure DevOps does; crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand), RecordedHandler, ThrowingProvider · `Recordings/github/` real GitHub answers, trimmed · `Recordings/azure-devops/` Azure DevOps' shapes with every name replaced |
 | `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment, stdin and the run folder's inputs |
 | `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary. Also called by the release |
 | `.github/workflows/release.yml` | A `vX.Y.Z` tag: the version checks, `ci.yml`, a Native AOT archive per platform, smoke-tested, and a GitHub Release with the changelog section as notes. Run by hand, a rehearsal that publishes nothing |

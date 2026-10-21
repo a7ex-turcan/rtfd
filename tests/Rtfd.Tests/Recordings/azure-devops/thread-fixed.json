@@ -1,0 +1,13 @@
+{
+  "id": 102,
+  "publishedDate": "2026-10-20T10:05:01.1Z",
+  "lastUpdatedDate": "2026-10-21T08:10:01.0Z",
+  "comments": [],
+  "status": "fixed",
+  "threadContext": {
+    "filePath": "/src/counter.py",
+    "rightFileStart": { "line": 6, "offset": 1 },
+    "rightFileEnd": { "line": 7, "offset": 1 }
+  },
+  "isDeleted": false
+}

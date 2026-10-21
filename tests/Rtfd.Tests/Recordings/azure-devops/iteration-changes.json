@@ -1,0 +1,23 @@
+{
+  "changeEntries": [
+    {
+      "changeTrackingId": 1,
+      "changeId": 1,
+      "item": {
+        "objectId": "C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE01",
+        "originalObjectId": "C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE02",
+        "path": "/src/counter.py"
+      },
+      "changeType": "edit"
+    },
+    {
+      "changeTrackingId": 2,
+      "changeId": 2,
+      "item": {
+        "objectId": "C0FFEE00C0FFEE00C0FFEE00C0FFEE00C0FFEE03",
+        "path": "/docs/Counting Guide.md"
+      },
+      "changeType": "add"
+    }
+  ]
+}

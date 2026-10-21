@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -51,9 +50,14 @@ public sealed record PostOutcome(PostStatus Status, string? ReviewId, string? Ur
 /// each request, the ids that came back; at the end the review and the replies are read back and
 /// checked. A posting a crash left open is matched against the posting identity's reviews and
 /// replies by body hash: what landed isn't sent again, and what didn't is sent from the record.
+/// On a provider that takes a review a thread at a time (Azure DevOps) that goes for each
+/// thread: a crash after two of five comments ends with the other three posted, never with five
+/// more (spec decision 71).
 /// </summary>
 public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo, TimeProvider clock, TextWriter log)
 {
+    private string Name => ProviderNames.Of(repo.Provider);
+
     /// <summary>Allowance for the provider's clock running behind ours when matching after a crash.</summary>
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(10);
 
@@ -114,6 +118,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
     /// </summary>
     public async Task<PostOutcome?> RecoverAsync(int number, string head, CancellationToken cancellationToken = default)
     {
+        var perThread = provider.Posting == ReviewPosting.PerThread;
         PostOutcome? forHead = null;
         foreach (var posting in store.OpenPostings(repo.Name, number))
         {
@@ -122,13 +127,18 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
             if (posting.ReviewId is { } known)
             {
                 log.WriteLine($"Finishing review {known}, which an earlier run posted but didn't see through...");
-                outcome = await CompleteAsync(posting, bodies, PostStatus.Recovered, cancellationToken).ConfigureAwait(false);
+                outcome = perThread
+                    ? await SendThreadsAsync(posting, bodies, PostStatus.Recovered, recovering: true, cancellationToken).ConfigureAwait(false)
+                    : await CompleteAsync(posting, bodies, PostStatus.Recovered, [], cancellationToken).ConfigureAwait(false);
             }
             else if (await FindAsync(posting, bodies[0].BodyHash, cancellationToken).ConfigureAwait(false) is { } found)
             {
                 log.WriteLine($"An earlier run's review landed before rtfd could record it: review {found.Id}. Nothing is posted again.");
                 store.RecordReview(posting.Id, found.Id, found.Url);
-                outcome = await CompleteAsync(posting with { ReviewId = found.Id, ReviewUrl = found.Url }, bodies, PostStatus.Recovered, cancellationToken).ConfigureAwait(false);
+                var landed = posting with { ReviewId = found.Id, ReviewUrl = found.Url };
+                outcome = perThread
+                    ? await SendThreadsAsync(landed, bodies, PostStatus.Recovered, recovering: true, cancellationToken).ConfigureAwait(false)
+                    : await CompleteAsync(landed, bodies, PostStatus.Recovered, [], cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -157,6 +167,11 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
 
     private async Task<PostOutcome> SendAsync(PostingRow posting, IReadOnlyList<PostedBody> bodies, PostStatus success, CancellationToken cancellationToken)
     {
+        if (provider.Posting == ReviewPosting.PerThread)
+        {
+            return await SendThreadsAsync(posting, bodies, success, recovering: false, cancellationToken).ConfigureAwait(false);
+        }
+
         var post = new ReviewPost(posting.Pr, posting.Head, ParseEvent(posting.Event), bodies[0].Body,
             [.. bodies.Where(b => b.IsInline).Select(b => new ReviewPostComment(b.Path!, b.Line!.Value, b.Side == "old" ? DiffSide.Old : DiffSide.New, b.Body))]);
         PostedReview posted;
@@ -167,7 +182,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
         catch (ProviderException ex) when (ex.Status == 422)
         {
             store.FinishPosting(posting.Id, "rejected", ex.Message, clock.GetUtcNow());
-            return new PostOutcome(PostStatus.Rejected, null, null, 0, [], $"GitHub refused the review: {ex.Message}");
+            return new PostOutcome(PostStatus.Rejected, null, null, 0, [], $"{Name} refused the review: {ex.Message}");
         }
         catch (ProviderException ex) when (ex.MayHaveLanded)
         {
@@ -175,7 +190,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
             if (await FindAsync(posting, bodies[0].BodyHash, cancellationToken).ConfigureAwait(false) is { } found)
             {
                 store.RecordReview(posting.Id, found.Id, found.Url);
-                return await CompleteAsync(posting with { ReviewId = found.Id, ReviewUrl = found.Url }, bodies, success, cancellationToken).ConfigureAwait(false);
+                return await CompleteAsync(posting with { ReviewId = found.Id, ReviewUrl = found.Url }, bodies, success, [], cancellationToken).ConfigureAwait(false);
             }
 
             return new PostOutcome(PostStatus.Unknown, null, null, 0, [], $"{ex.Message}. The review may still land; the next run checks before posting again.");
@@ -187,16 +202,133 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
         }
 
         store.RecordReview(posting.Id, posted.Id, posted.Url);
-        return await CompleteAsync(posting with { ReviewId = posted.Id, ReviewUrl = posted.Url }, bodies, success, cancellationToken).ConfigureAwait(false);
+        return await CompleteAsync(posting with { ReviewId = posted.Id, ReviewUrl = posted.Url }, bodies, success, [], cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A review a thread at a time: the summary first, whose thread is the review and which each
+    /// inline thread names, then each inline comment, then the vote. Each id is recorded as it
+    /// comes back. <paramref name="recovering"/>, the inline comments without a recorded id are
+    /// first looked for on the PR by hash, since a crash may have sent them. A post that may or
+    /// may not have landed stops here with the posting still open; the next run picks it up.
+    /// </summary>
+    private async Task<PostOutcome> SendThreadsAsync(
+        PostingRow posting, IReadOnlyList<PostedBody> recorded, PostStatus success, bool recovering, CancellationToken cancellationToken)
+    {
+        var bodies = recorded.ToList();
+        if (posting.ReviewId is null)
+        {
+            PostedComment summary;
+            try
+            {
+                summary = await provider.StartThreadAsync(new ThreadPost(posting.Pr, posting.Head, bodies[0].Body, null, null), cancellationToken).ConfigureAwait(false);
+            }
+            catch (ProviderException ex) when (ex.MayHaveLanded)
+            {
+                if (await FindAsync(posting, bodies[0].BodyHash, cancellationToken).ConfigureAwait(false) is not { } found)
+                {
+                    return new PostOutcome(PostStatus.Unknown, null, null, 0, [], $"{ex.Message}. The review may still land; the next run checks before posting again.");
+                }
+
+                summary = new PostedComment(found.Id, "", null, found.Body) { Url = found.Url };
+            }
+            catch (ProviderException ex) when (ex.Status is 400 or 422)
+            {
+                store.FinishPosting(posting.Id, "rejected", ex.Message, clock.GetUtcNow());
+                return new PostOutcome(PostStatus.Rejected, null, null, 0, [], $"{Name} refused the review: {ex.Message}");
+            }
+            catch (ProviderException ex)
+            {
+                store.FinishPosting(posting.Id, "lost", ex.Message, clock.GetUtcNow());
+                return new PostOutcome(PostStatus.Failed, null, null, 0, [], ex.Message);
+            }
+
+            store.RecordReview(posting.Id, summary.Id, summary.Url);
+            store.RecordComment(posting.Id, 0, summary.Id);
+            posting = posting with { ReviewId = summary.Id, ReviewUrl = summary.Url };
+            bodies[0] = bodies[0] with { CommentId = summary.Id };
+        }
+
+        var problems = new List<string>();
+        var refused = new HashSet<int>();
+        var claimed = bodies.Select(b => b.CommentId).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        var earlier = recovering && bodies.Any(b => b.IsInline && b.CommentId is null)
+            ? await provider.ListReviewCommentsAsync(posting.Pr, cancellationToken).ConfigureAwait(false)
+            : [];
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            var body = bodies[i];
+            if (!body.IsInline || body.CommentId is not null)
+            {
+                continue;
+            }
+
+            var sent = earlier.FirstOrDefault(c =>
+                c.InReplyTo is null
+                && !claimed.Contains(c.Id)
+                && c.Path == body.Path
+                && string.Equals(c.Author, posting.Identity, StringComparison.OrdinalIgnoreCase)
+                && (c.CreatedAt is null || c.CreatedAt >= posting.StartedAt - ClockSkew)
+                && Hash(c.Body) == body.BodyHash);
+            string id;
+            if (sent is not null)
+            {
+                id = sent.Id;
+            }
+            else
+            {
+                var inline = new ReviewPostComment(body.Path!, body.Line!.Value, body.Side == "old" ? DiffSide.Old : DiffSide.New, body.Body);
+                try
+                {
+                    id = (await provider.StartThreadAsync(new ThreadPost(posting.Pr, posting.Head, body.Body, inline, posting.ReviewId), cancellationToken).ConfigureAwait(false)).Id;
+                }
+                catch (ProviderException ex) when (ex.MayHaveLanded)
+                {
+                    var landed = bodies.Count(b => b.IsInline && b.CommentId is not null);
+                    return new PostOutcome(PostStatus.Unknown, posting.ReviewId, posting.ReviewUrl, landed, [],
+                        $"{ex.Message}. The comment on {body.Path}:{body.Line} may still land; the next run checks before posting it again.");
+                }
+                catch (ProviderException ex)
+                {
+                    // Refused for good: the rest of the review still goes, and the outcome says which one didn't.
+                    problems.Add($"{Name} refused the comment on {body.Path}:{body.Line}: {ex.Message}");
+                    refused.Add(body.Ordinal);
+                    continue;
+                }
+            }
+
+            claimed.Add(id);
+            store.RecordComment(posting.Id, body.Ordinal, id);
+            bodies[i] = body with { CommentId = id };
+        }
+
+        // The vote goes last, once the threads it stands for are there. Setting it again is harmless.
+        if (ParseEvent(posting.Event) is var verdict and not Verdict.Comment)
+        {
+            try
+            {
+                await provider.SetVoteAsync(posting.Pr, verdict, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ProviderException ex)
+            {
+                problems.Add($"the vote didn't go through: {ex.Message}");
+            }
+        }
+
+        return await CompleteAsync(posting, bodies, success, problems, cancellationToken, refused).ConfigureAwait(false);
     }
 
     /// <summary>Once the review is on the PR: the replies and resolves, then the read-back, and the record of what landed.</summary>
-    private async Task<PostOutcome> CompleteAsync(PostingRow posting, IReadOnlyList<PostedBody> recorded, PostStatus status, CancellationToken cancellationToken)
+    /// <param name="earlier">What went wrong on the way, which the read-back adds to.</param>
+    /// <param name="refused">Inline comments the provider refused for good, which the read-back doesn't look for.</param>
+    private async Task<PostOutcome> CompleteAsync(
+        PostingRow posting, IReadOnlyList<PostedBody> recorded, PostStatus status, IReadOnlyList<string> earlier, CancellationToken cancellationToken,
+        IReadOnlySet<int>? refused = null)
     {
         var bodies = recorded.ToList();
-        var problems = new List<string>();
+        var problems = earlier.ToList();
         var settled = await ThreadActionsAsync(posting, bodies, problems, cancellationToken).ConfigureAwait(false);
-        await VerifyAsync(posting, bodies, problems, cancellationToken).ConfigureAwait(false);
+        await VerifyAsync(posting, bodies, problems, refused ?? new HashSet<int>(), cancellationToken).ConfigureAwait(false);
 
         // A reply that may or may not have landed keeps the posting open: the next run looks for it by hash.
         if (settled)
@@ -213,7 +345,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
         store.MarkReported(repo.Name, posting.Pr, posting.Reports, clock.GetUtcNow());
         store.SetLastReviewed(repo.Name, posting.Pr, posting.Head, posting.MergeBase);
         var replies = bodies.Where(b => b.IsReply).ToList();
-        return new PostOutcome(status, posting.ReviewId, posting.ReviewUrl, bodies.Count(b => b.IsInline), problems)
+        return new PostOutcome(status, posting.ReviewId, posting.ReviewUrl, bodies.Count(b => b.IsInline && b.CommentId is not null), problems)
         {
             Replies = replies.Count(b => b.CommentId is not null),
             Resolved = replies.Count(b => b.Action == "resolve" && b.CommentId is not null && !problems.Any(p => p.StartsWith($"thread {b.ReplyTo} ", StringComparison.Ordinal))),
@@ -258,7 +390,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
                 string commentId;
                 if (sent is not null)
                 {
-                    commentId = sent.Id.ToString(CultureInfo.InvariantCulture);
+                    commentId = sent.Id;
                 }
                 else
                 {
@@ -296,7 +428,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
             {
                 try
                 {
-                    await provider.ResolveThreadAsync(thread.Id, cancellationToken).ConfigureAwait(false);
+                    await provider.ResolveThreadAsync(posting.Pr, thread.Id, cancellationToken).ConfigureAwait(false);
                 }
                 catch (ProviderException ex)
                 {
@@ -310,7 +442,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
     }
 
     /// <summary>Reads the review back (its body, its event, every inline comment by hash) and every reply, and records the comment ids.</summary>
-    private async Task VerifyAsync(PostingRow posting, List<PostedBody> bodies, List<string> problems, CancellationToken cancellationToken)
+    private async Task VerifyAsync(PostingRow posting, List<PostedBody> bodies, List<string> problems, IReadOnlySet<int> refused, CancellationToken cancellationToken)
     {
         var review = await provider.GetReviewAsync(posting.Pr, posting.ReviewId!, cancellationToken).ConfigureAwait(false);
         if (review is null)
@@ -321,7 +453,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
         {
             if (Hash(review.Body) != bodies[0].BodyHash)
             {
-                problems.Add("the summary on GitHub differs from what was sent");
+                problems.Add($"the summary on {Name} differs from what was sent");
             }
 
             var expected = posting.Event switch
@@ -330,7 +462,9 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
                 "REQUEST_CHANGES" => "CHANGES_REQUESTED",
                 _ => "COMMENTED",
             };
-            if (review.State != expected)
+            // Where the vote is kept apart from the review, a comment leaves an earlier vote standing.
+            var voteApart = provider.Posting == ReviewPosting.PerThread && expected == "COMMENTED";
+            if (review.State != expected && !voteApart)
             {
                 problems.Add($"the review is {review.State}, not {expected}");
             }
@@ -339,7 +473,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
             for (var i = 0; i < bodies.Count; i++)
             {
                 var body = bodies[i];
-                if (!body.IsInline)
+                if (!body.IsInline || refused.Contains(body.Ordinal))
                 {
                     continue;
                 }
@@ -347,7 +481,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
                 var match = unmatched.FirstOrDefault(c => c.Path == body.Path && Hash(c.Body) == body.BodyHash);
                 if (match is null)
                 {
-                    problems.Add($"the comment on {body.Path}:{body.Line} isn't on GitHub as sent");
+                    problems.Add($"the comment on {body.Path}:{body.Line} isn't on {Name} as sent");
                     continue;
                 }
 
@@ -372,10 +506,10 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
         foreach (var reply in replies)
         {
             var thread = threads.FirstOrDefault(t => t.Comments.Count > 0 && OwnThreads.RootId(t) == reply.ReplyTo);
-            var comment = thread?.Comments.FirstOrDefault(c => c.Id.ToString(CultureInfo.InvariantCulture) == reply.CommentId);
+            var comment = thread?.Comments.FirstOrDefault(c => c.Id == reply.CommentId);
             if (comment is null || Hash(comment.Body) != reply.BodyHash)
             {
-                problems.Add($"thread {reply.ReplyTo}: the reply isn't on GitHub as sent");
+                problems.Add($"thread {reply.ReplyTo}: the reply isn't on {Name} as sent");
             }
             else if (reply.Action == "resolve" && !thread!.IsResolved && !problems.Any(p => p.StartsWith($"thread {reply.ReplyTo} ", StringComparison.Ordinal)))
             {

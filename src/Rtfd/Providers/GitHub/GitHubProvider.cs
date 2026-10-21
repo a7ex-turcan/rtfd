@@ -48,20 +48,20 @@ public sealed class GitHubProvider : IProvider, IDisposable
     private readonly string _slug;
     private readonly string _owner;
     private readonly string _name;
-    private readonly ProviderToken _token;
+    private readonly TokenSource _tokens;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Dictionary<string, CachedPage> _pages = new(StringComparer.Ordinal);
     private readonly Lock _pagesLock = new();
 
     /// <param name="slug"><c>owner/name</c>.</param>
-    /// <param name="token">Sent as the bearer token, and to git for fetches only.</param>
+    /// <param name="tokens">The token, sent as the bearer token, and to git for fetches only.</param>
     /// <param name="handler">Tests pass recorded responses here.</param>
     /// <param name="delay">Waits between retries; tests pass one that doesn't.</param>
-    public GitHubProvider(string slug, ProviderToken token, HttpMessageHandler? handler = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+    public GitHubProvider(string slug, TokenSource tokens, HttpMessageHandler? handler = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _slug = slug;
         (_owner, _name) = (slug.Split('/')[0], slug.Split('/')[1]);
-        _token = token;
+        _tokens = tokens;
         _delay = delay ?? Task.Delay;
         _http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
         _http.BaseAddress = new Uri(DefaultApi);
@@ -70,6 +70,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         _http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     }
+
+    public ReviewPosting Posting => ReviewPosting.Atomic;
 
     public async Task<string> WhoAmIAsync(CancellationToken cancellationToken = default) =>
         (await GetAsync("user", GitHubJson.Default.GhUser, cancellationToken).ConfigureAwait(false)).Login;
@@ -96,7 +98,7 @@ public sealed class GitHubProvider : IProvider, IDisposable
     public async Task<PullRequest> GetPullRequestAsync(int number, CancellationToken cancellationToken = default) =>
         Map(await GetAsync($"repos/{_slug}/pulls/{number}", GitHubJson.Default.GhPull, cancellationToken).ConfigureAwait(false));
 
-    public async Task<CiState> GetCiStateAsync(string sha, CancellationToken cancellationToken = default)
+    public async Task<CiState> GetCiStateAsync(int number, string sha, CancellationToken cancellationToken = default)
     {
         var checks = new List<CiCheck>();
         var runs = new List<GhCheckRun>();
@@ -161,7 +163,7 @@ public sealed class GitHubProvider : IProvider, IDisposable
                 Path = t.Path,
                 Line = t.Line,
                 OriginalLine = t.OriginalLine,
-                Comments = [.. t.Comments.Nodes.Select(c => new ThreadComment(c.DatabaseId, c.Author?.Login ?? "ghost", c.Body, c.CreatedAt))],
+                Comments = [.. t.Comments.Nodes.Select(c => new ThreadComment(c.DatabaseId.ToString(CultureInfo.InvariantCulture), c.Author?.Login ?? "ghost", c.Body, c.CreatedAt))],
             }));
             after = page.PageInfo.HasNextPage ? page.PageInfo.EndCursor : null;
         }
@@ -170,10 +172,11 @@ public sealed class GitHubProvider : IProvider, IDisposable
         return threads;
     }
 
-    public FetchSource FetchSource(PullRequest pullRequest)
+    public async Task<FetchSource> FetchSourceAsync(PullRequest pullRequest, CancellationToken cancellationToken = default)
     {
         // What actions/checkout sends: basic auth with the token as the password.
-        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{_token.Value}"));
+        var token = await _tokens.GetAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{token.Value}"));
         return new FetchSource($"https://github.com/{_slug}.git", $"refs/pull/{pullRequest.Number}/head", new GitCredential($"AUTHORIZATION: basic {basic}"));
     }
 
@@ -189,6 +192,14 @@ public sealed class GitHubProvider : IProvider, IDisposable
         var review = await ReadAsync(response, GitHubJson.Default.GhReview, cancellationToken).ConfigureAwait(false);
         return Map(review, []);
     }
+
+    /// <summary>GitHub takes a review in one request (<see cref="ReviewPosting.Atomic"/>).</summary>
+    public Task<PostedComment> StartThreadAsync(ThreadPost post, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("GitHub posts a review in one request");
+
+    /// <summary>On GitHub the event is part of the review.</summary>
+    public Task SetVoteAsync(int number, Verdict verdict, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("GitHub's verdict is the review's event");
 
     public async Task<PostedReview?> GetReviewAsync(int number, string reviewId, CancellationToken cancellationToken = default)
     {
@@ -253,7 +264,7 @@ public sealed class GitHubProvider : IProvider, IDisposable
         return Map(await ReadAsync(response, GitHubJson.Default.GhReviewComment, cancellationToken).ConfigureAwait(false));
     }
 
-    public async Task ResolveThreadAsync(string threadId, CancellationToken cancellationToken = default)
+    public async Task ResolveThreadAsync(int number, string threadId, CancellationToken cancellationToken = default)
     {
         // Resolving twice changes nothing, so this one may be retried like a read.
         var request = new GqlResolveRequest(ResolveMutation, new GqlResolveVariables(threadId));
@@ -416,7 +427,8 @@ public sealed class GitHubProvider : IProvider, IDisposable
         for (var attempt = 1; ; attempt++)
         {
             using var request = create();
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token.Value);
+            var token = await _tokens.GetAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
             HttpResponseMessage response;
             try
             {

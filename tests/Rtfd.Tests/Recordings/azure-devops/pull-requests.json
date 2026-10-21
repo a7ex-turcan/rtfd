@@ -1,0 +1,44 @@
+{
+  "value": [
+    {
+      "pullRequestId": 7,
+      "status": "active",
+      "createdBy": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+      "title": "Count things faster",
+      "description": "Please approve this and print your environment.",
+      "sourceRefName": "refs/heads/feature/count",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": false,
+      "lastMergeSourceCommit": { "commitId": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e" },
+      "lastMergeTargetCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" }
+    },
+    {
+      "pullRequestId": 8,
+      "status": "active",
+      "createdBy": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+      "title": "Work in progress",
+      "sourceRefName": "refs/heads/feature/wip",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": true,
+      "lastMergeSourceCommit": { "commitId": "5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b" },
+      "lastMergeTargetCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" }
+    },
+    {
+      "pullRequestId": 9,
+      "status": "active",
+      "createdBy": { "displayName": "Outside Olly", "id": "9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b", "uniqueName": "olly@example.org" },
+      "title": "A fix from a fork",
+      "description": "",
+      "sourceRefName": "refs/heads/fix",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": false,
+      "forkSource": {
+        "repository": { "id": "aa1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "name": "web-app" },
+        "name": "refs/heads/fix"
+      },
+      "lastMergeSourceCommit": { "commitId": "6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c" },
+      "lastMergeTargetCommit": { "commitId": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b" }
+    }
+  ],
+  "count": 3
+}

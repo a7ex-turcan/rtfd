@@ -3,7 +3,6 @@ using Rtfd.Config;
 using Rtfd.Git;
 using Rtfd.Processes;
 using Rtfd.Providers;
-using Rtfd.Providers.GitHub;
 
 namespace Rtfd.Cli;
 
@@ -11,12 +10,16 @@ namespace Rtfd.Cli;
 /// <param name="Providers">Makes the provider client for a repo and its token.</param>
 /// <param name="RtfdExecutable">The binary the probe's <c>mcp.json</c> starts as <c>rtfd-git</c>.</param>
 /// <param name="Adjust">Changes the probe's command line; only tests use it, to prove a leak is caught.</param>
+/// <param name="Tokens">Makes each repo's token source from the environment; null for the real ones.</param>
 internal sealed record ValidateServices(
-    Func<RepoConfig, ProviderToken, IProvider> Providers,
+    Func<RepoConfig, TokenSource, IProvider> Providers,
     string RtfdExecutable,
-    Func<IReadOnlyList<string>, IReadOnlyList<string>>? Adjust = null)
+    Func<IReadOnlyList<string>, IReadOnlyList<string>>? Adjust = null,
+    Func<Func<string, string?>, TokenSources>? Tokens = null)
 {
-    public static ValidateServices Real => new((repo, token) => new GitHubProvider(repo.Slug, token), Environment.ProcessPath ?? "rtfd");
+    public static ValidateServices Real => new(ProviderFactory.Create, Environment.ProcessPath ?? "rtfd");
+
+    public TokenSources TokensFor(Func<string, string?> environment) => Tokens?.Invoke(environment) ?? TokenSources.Real(environment, TimeProvider.System);
 }
 
 /// <summary>
@@ -68,7 +71,8 @@ internal static class ValidateCommand
         else
         {
             ctx.Stderr.WriteLine("Checking tokens and repos with the provider...");
-            var (repos, providerDiagnostics) = ProviderChecks.RunAsync(config, ctx.Environment, services.Providers).GetAwaiter().GetResult();
+            var tokens = services.TokensFor(ctx.Environment);
+            var (repos, providerDiagnostics) = ProviderChecks.RunAsync(config, tokens, services.Providers).GetAwaiter().GetResult();
             diagnostics.AddRange(providerDiagnostics);
             PrintRepos(output, repos);
 
@@ -76,7 +80,7 @@ internal static class ValidateCommand
             foreach (var agent in config.Agents.Values.Where(a => a.Kind == AgentKind.Claude))
             {
                 ctx.Stderr.WriteLine($"Launching {agent.Name} the way a review would...");
-                agents.Add(Probe(config, agent, ctx.Environment, services));
+                agents.Add(Probe(config, agent, ctx.Environment, tokens.Known(config), services));
             }
 
             diagnostics.AddRange(agents.SelectMany(a => a.Diagnostics));
@@ -112,10 +116,9 @@ internal static class ValidateCommand
         return errors == 0 ? EntryPoint.Ok : EntryPoint.Failure;
     }
 
-    private static AgentReport Probe(RtfdConfig config, AgentConfig agent, Func<string, string?> environment, ValidateServices services)
+    private static AgentReport Probe(RtfdConfig config, AgentConfig agent, Func<string, string?> environment, IReadOnlyList<string> tokens, ValidateServices services)
     {
         // The environment a review gives the agent: the allowlist, minus every token rtfd holds.
-        var tokens = config.Repos.Select(r => environment(r.TokenEnv)).Where(t => !string.IsNullOrEmpty(t)).Select(t => t!).ToList();
         var childEnvironment = ChildEnvironment.Build(environment, tokens);
         var work = Path.Combine(config.Data.Root, "validate", $"{agent.Name}-{Guid.NewGuid().ToString("N")[..8]}");
         try

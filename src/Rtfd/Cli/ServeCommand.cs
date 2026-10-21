@@ -2,15 +2,17 @@ using System.Runtime.InteropServices;
 using Rtfd.Config;
 using Rtfd.Processes;
 using Rtfd.Providers;
-using Rtfd.Providers.GitHub;
 using Rtfd.Serve;
 using Rtfd.State;
 
 namespace Rtfd.Cli;
 
 /// <summary>What <c>serve</c> talks to beyond the config; tests pass fakes and stop it with <see cref="Stop"/>.</summary>
-internal sealed record ServeServices(Func<RepoConfig, ProviderToken, IProvider> Providers, string RtfdExecutable, TimeProvider Clock)
+internal sealed record ServeServices(Func<RepoConfig, TokenSource, IProvider> Providers, string RtfdExecutable, TimeProvider Clock)
 {
+    /// <summary>Makes each repo's token source from the environment; null for the real ones, from the variables and the Azure CLI.</summary>
+    public Func<Func<string, string?>, TokenSources>? Tokens { get; init; }
+
     public CancellationToken Stop { get; init; }
     public Func<TimeSpan, CancellationToken, Task>? Delay { get; init; }
     public TimeSpan Heartbeat { get; init; } = TimeSpan.FromSeconds(30);
@@ -18,7 +20,7 @@ internal sealed record ServeServices(Func<RepoConfig, ProviderToken, IProvider> 
     /// <summary>The real process: stop on Ctrl+C and termination signals, and the job object that takes the agent down with serve.</summary>
     public bool OwnsProcess { get; init; }
 
-    public static ServeServices Real => new((repo, token) => new GitHubProvider(repo.Slug, token), Environment.ProcessPath ?? "rtfd", TimeProvider.System)
+    public static ServeServices Real => new(ProviderFactory.Create, Environment.ProcessPath ?? "rtfd", TimeProvider.System)
     {
         OwnsProcess = true,
     };
@@ -65,6 +67,7 @@ internal static class ServeCommand
                 Config = config,
                 Store = store,
                 Environment = ctx.Environment,
+                Tokens = services.Tokens?.Invoke(ctx.Environment) ?? TokenSources.Real(ctx.Environment, services.Clock),
                 Providers = services.Providers,
                 RtfdExecutable = services.RtfdExecutable,
                 Log = log,

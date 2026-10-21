@@ -24,7 +24,11 @@ public sealed record RunRequest
     public bool Keep { get; init; }
 
     public required Func<string, string?> Environment { get; init; }
-    public required Func<RepoConfig, ProviderToken, IProvider> Providers { get; init; }
+
+    /// <summary>Each repo's token: from its variable, or from the Azure CLI.</summary>
+    public required TokenSources Tokens { get; init; }
+
+    public required Func<RepoConfig, TokenSource, IProvider> Providers { get; init; }
 
     /// <summary>The rtfd binary <c>mcp.json</c> starts as <c>rtfd-git</c>, by absolute path.</summary>
     public required string RtfdExecutable { get; init; }
@@ -117,22 +121,23 @@ public static class ReviewRun
         var report = new RunReport();
         var (repo, agent, log) = (request.Repo, request.Agent, request.Log);
 
-        var tokenValue = request.Environment(repo.TokenEnv);
-        if (string.IsNullOrEmpty(tokenValue))
+        var source = request.Tokens.For(repo);
+        try
         {
-            report.Refused = $"{repo.TokenEnv} isn't set. It should hold the token rtfd reads {repo.Slug} with (for GitHub, `gh auth token` prints one).";
+            await source.GetAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (ProviderException ex) when (ex.NoToken)
+        {
+            report.Refused = repo.Provider == ProviderKind.GitHub && repo.TokenEnv is not null
+                ? $"{repo.TokenEnv} isn't set. It should hold the token rtfd reads {repo.Slug} with (for GitHub, `gh auth token` prints one)."
+                : ex.Message;
             return report;
         }
 
         // Every token rtfd holds, for the secret check and the environment filter: not just this repo's.
-        var tokens = request.Config.Repos
-            .Select(r => request.Environment(r.TokenEnv))
-            .Where(t => !string.IsNullOrEmpty(t))
-            .Select(t => t!)
-            .Distinct()
-            .ToList();
+        var tokens = request.Tokens.Known(request.Config);
 
-        var provider = request.Providers(repo, new ProviderToken(tokenValue));
+        var provider = request.Providers(repo, source);
         try
         {
             log.WriteLine($"Reading PR #{request.Number} from {repo.Slug}...");
@@ -150,7 +155,8 @@ public static class ReviewRun
             var git = new GitRunner(request.Config.Data.GitDirectory, request.Environment, tokens);
             var mirror = Mirror.For(request.Config.Data, repo.Name, git);
             log.WriteLine($"Fetching into {mirror.Path}...");
-            var commits = report.Commits = await mirror.FetchAsync(provider.FetchSource(pr), pr.Number, pr.BaseRef, cancellationToken).ConfigureAwait(false);
+            var fetchSource = await provider.FetchSourceAsync(pr, cancellationToken).ConfigureAwait(false);
+            var commits = report.Commits = await mirror.FetchAsync(fetchSource, pr.Number, pr.BaseRef, cancellationToken).ConfigureAwait(false);
             if (commits.Head != pr.HeadSha)
             {
                 log.WriteLine($"The PR moved while rtfd read it; reviewing the fetched head {commits.Head[..8]}.");
@@ -168,7 +174,7 @@ public static class ReviewRun
                 log.WriteLine($"The PR is {pr.State}: reviewing it against its base as it was ({oldBase[..8]}).");
             }
 
-            report.Ci = await provider.GetCiStateAsync(commits.Head, cancellationToken).ConfigureAwait(false);
+            report.Ci = await provider.GetCiStateAsync(pr.Number, commits.Head, cancellationToken).ConfigureAwait(false);
             var diff = report.Diff = (await DiffModel.ReadAsync(git, mirror.Path, commits.MergeBase, commits.Head, cancellationToken).ConfigureAwait(false))
                 .Apply(repo.Settings.Exclude, repo.Settings.MaxDiffLines);
 
@@ -187,7 +193,7 @@ public static class ReviewRun
                 if (prior.Last is { } last && last.Head != commits.Head)
                 {
                     log.WriteLine($"Following up on the review of {last.Head[..8]}...");
-                    var pass = await Interdiff.BuildAsync(git, mirror, provider.FetchSource(pr), pr.Number, last.Head, last.MergeBase, commits, cancellationToken).ConfigureAwait(false);
+                    var pass = await Interdiff.BuildAsync(git, mirror, fetchSource, pr.Number, last.Head, last.MergeBase, commits, cancellationToken).ConfigureAwait(false);
                     report.FollowUp = pass.Interdiff is { } interdiff ? pass with { Interdiff = interdiff.Apply(repo.Settings.Exclude, repo.Settings.MaxDiffLines) } : pass;
                 }
             }

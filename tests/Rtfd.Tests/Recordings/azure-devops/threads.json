@@ -1,0 +1,191 @@
+{
+  "value": [
+    {
+      "id": 101,
+      "publishedDate": "2026-10-20T10:05:00.3Z",
+      "lastUpdatedDate": "2026-10-20T10:05:00.3Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Rae Viewer", "id": "6f1b2a3c-1d4e-4f50-8a6b-7c8d9e0f1a21", "uniqueName": "reviewer@contoso.com" },
+          "content": "Not ready: 1 Should open.\n\nThe amount parameter needs a guard.\n\n<!-- rtfd sha=1e3c5a7b9d1f3e5c7a9b1d3f5e7c9a1b3d5f7e9c base=9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b run=3 -->",
+          "publishedDate": "2026-10-20T10:05:00.3Z",
+          "lastUpdatedDate": "2026-10-20T10:05:00.3Z",
+          "commentType": "text"
+        }
+      ],
+      "status": "closed",
+      "threadContext": null,
+      "properties": {
+        "Microsoft.TeamFoundation.Discussion.SupportsMarkdown": { "$type": "System.Int32", "$value": 1 }
+      },
+      "isDeleted": false
+    },
+    {
+      "pullRequestThreadContext": {
+        "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 1 },
+        "changeTrackingId": 1,
+        "trackingCriteria": {
+          "firstComparingIteration": 2,
+          "secondComparingIteration": 2,
+          "origFilePath": "/src/counter.py",
+          "origRightFileStart": { "line": 5, "offset": 1 },
+          "origRightFileEnd": { "line": 6, "offset": 1 }
+        }
+      },
+      "id": 102,
+      "publishedDate": "2026-10-20T10:05:01.1Z",
+      "lastUpdatedDate": "2026-10-20T11:40:12.9Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Rae Viewer", "id": "6f1b2a3c-1d4e-4f50-8a6b-7c8d9e0f1a21", "uniqueName": "reviewer@contoso.com" },
+          "content": "Should: a negative amount makes a count go below zero.",
+          "publishedDate": "2026-10-20T10:05:01.1Z",
+          "lastUpdatedDate": "2026-10-20T10:05:01.1Z",
+          "commentType": "text"
+        },
+        {
+          "id": 2,
+          "parentCommentId": 1,
+          "author": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+          "content": "Guarded it now.",
+          "publishedDate": "2026-10-20T11:40:12.9Z",
+          "lastUpdatedDate": "2026-10-20T11:40:12.9Z",
+          "commentType": "text"
+        },
+        {
+          "id": 3,
+          "parentCommentId": 1,
+          "author": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+          "content": "",
+          "publishedDate": "2026-10-20T11:40:30.0Z",
+          "lastUpdatedDate": "2026-10-20T11:41:00.0Z",
+          "commentType": "text",
+          "isDeleted": true
+        }
+      ],
+      "status": "active",
+      "threadContext": {
+        "filePath": "/src/counter.py",
+        "rightFileStart": { "line": 6, "offset": 1 },
+        "rightFileEnd": { "line": 7, "offset": 1 }
+      },
+      "properties": {
+        "Microsoft.TeamFoundation.Discussion.SupportsMarkdown": { "$type": "System.Int32", "$value": 1 },
+        "rtfd.review": { "$type": "System.String", "$value": "101" }
+      },
+      "isDeleted": false
+    },
+    {
+      "pullRequestThreadContext": {
+        "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 1 },
+        "changeTrackingId": 1
+      },
+      "id": 103,
+      "publishedDate": "2026-10-20T10:20:00.0Z",
+      "lastUpdatedDate": "2026-10-20T11:00:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+          "content": "Note to self: rename total() later.",
+          "publishedDate": "2026-10-20T10:20:00.0Z",
+          "lastUpdatedDate": "2026-10-20T10:20:00.0Z",
+          "commentType": "text"
+        }
+      ],
+      "status": "fixed",
+      "threadContext": {
+        "filePath": "/src/counter.py",
+        "rightFileStart": { "line": 9, "offset": 1 },
+        "rightFileEnd": { "line": 9, "offset": 30 }
+      },
+      "properties": {
+        "Microsoft.TeamFoundation.Discussion.SupportsMarkdown": { "$type": "System.Int32", "$value": 1 }
+      },
+      "isDeleted": false
+    },
+    {
+      "pullRequestThreadContext": {
+        "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 1 },
+        "changeTrackingId": 1,
+        "trackingCriteria": {
+          "firstComparingIteration": 2,
+          "secondComparingIteration": 2,
+          "origFilePath": "/src/counter.py",
+          "origRightFileStart": { "line": 3, "offset": 9 },
+          "origRightFileEnd": { "line": 3, "offset": 40 }
+        }
+      },
+      "id": 104,
+      "publishedDate": "2026-10-20T10:05:01.9Z",
+      "lastUpdatedDate": "2026-10-20T10:05:01.9Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Rae Viewer", "id": "6f1b2a3c-1d4e-4f50-8a6b-7c8d9e0f1a21", "uniqueName": "reviewer@contoso.com" },
+          "content": "MINOR: the counts could be a Counter.",
+          "publishedDate": "2026-10-20T10:05:01.9Z",
+          "lastUpdatedDate": "2026-10-20T10:05:01.9Z",
+          "commentType": "text"
+        }
+      ],
+      "status": "active",
+      "threadContext": {
+        "filePath": "/src/counter.py",
+        "rightFileStart": null,
+        "rightFileEnd": null
+      },
+      "properties": {
+        "Microsoft.TeamFoundation.Discussion.SupportsMarkdown": { "$type": "System.Int32", "$value": 1 },
+        "rtfd.review": { "$type": "System.String", "$value": "101" }
+      },
+      "isDeleted": false
+    },
+    {
+      "id": 105,
+      "publishedDate": "2026-10-20T09:00:04.1Z",
+      "lastUpdatedDate": "2026-10-20T09:00:04.1Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+          "content": "Ada Author set auto-complete",
+          "publishedDate": "2026-10-20T09:00:04.1Z",
+          "lastUpdatedDate": "2026-10-20T09:00:04.1Z",
+          "commentType": "system"
+        }
+      ],
+      "properties": {
+        "CodeReviewThreadType": { "$type": "System.String", "$value": "AutoCompleteUpdated" }
+      },
+      "isDeleted": false
+    },
+    {
+      "id": 106,
+      "publishedDate": "2026-10-20T09:30:00.0Z",
+      "lastUpdatedDate": "2026-10-20T09:31:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Ada Author", "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "uniqueName": "author@contoso.com" },
+          "content": "",
+          "publishedDate": "2026-10-20T09:30:00.0Z",
+          "lastUpdatedDate": "2026-10-20T09:31:00.0Z",
+          "commentType": "text",
+          "isDeleted": true
+        }
+      ],
+      "status": "active",
+      "isDeleted": true
+    }
+  ],
+  "count": 6
+}

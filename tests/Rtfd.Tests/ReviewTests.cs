@@ -291,6 +291,19 @@ public sealed class VerdictTests
         Assert.Equal(Verdict.Comment, decision.Event);
         Assert.Contains("APPROVE downgraded to COMMENT: the posting identity is the PR author", decision.Why, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void A_draft_on_Azure_DevOps_takes_no_vote_and_one_on_GitHub_still_does()
+    {
+        var azure = Repo(Verdict.Comment, Verdict.Approve, Verdict.RequestChanges) with { Provider = ProviderKind.AzureDevOps, Slug = "org/project/repo" };
+
+        var draft = ReviewBuilder.Decide([FindingSeverity.Should], false, azure, "author", "bot", draft: true);
+        var github = ReviewBuilder.Decide([FindingSeverity.Should], false, Repo(Verdict.Comment, Verdict.RequestChanges), "author", "bot", draft: true);
+
+        Assert.Equal(Verdict.Comment, draft.Event);
+        Assert.Contains("REQUEST_CHANGES downgraded to COMMENT: Azure DevOps takes no vote on a draft", draft.Why, StringComparison.Ordinal);
+        Assert.Equal(Verdict.RequestChanges, github.Event);
+    }
 }
 
 public sealed class SecretScannerTests

@@ -1,0 +1,47 @@
+{
+  "value": [
+    {
+      "id": 1,
+      "state": "succeeded",
+      "description": "Good job! No SAST violations were found in this pull request",
+      "context": { "name": "SAST Scan", "genre": "Scanner" },
+      "creationDate": "2026-10-20T09:00:09.6Z",
+      "iterationId": 1,
+      "targetUrl": "https://scanner.example.org/reports/1"
+    },
+    {
+      "id": 2,
+      "description": "Coverage status check queued for Web App - Validation",
+      "context": { "name": "codecoverage", "genre": "web app - validation" },
+      "creationDate": "2026-10-20T11:30:05.1Z",
+      "iterationId": 2
+    },
+    {
+      "id": 3,
+      "state": "pending",
+      "description": "Scanning for SAST violations in this pull request...",
+      "context": { "name": "SAST Scan", "genre": "Scanner" },
+      "creationDate": "2026-10-20T11:30:06.6Z",
+      "iterationId": 2,
+      "targetUrl": "https://scanner.example.org/reports/2"
+    },
+    {
+      "id": 4,
+      "state": "succeeded",
+      "description": "Good job! No SAST violations were found in this pull request",
+      "context": { "name": "SAST Scan", "genre": "Scanner" },
+      "creationDate": "2026-10-20T11:31:54.3Z",
+      "iterationId": 2,
+      "targetUrl": "https://scanner.example.org/reports/2"
+    },
+    {
+      "id": 5,
+      "state": "notApplicable",
+      "description": "Coverage status check not applicable for Web App - Validation",
+      "context": { "name": "codecoverage", "genre": "web app - validation" },
+      "creationDate": "2026-10-20T11:36:24.4Z",
+      "iterationId": 2
+    }
+  ],
+  "count": 5
+}

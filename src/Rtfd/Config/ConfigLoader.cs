@@ -290,7 +290,9 @@ public static partial class ConfigLoader
             var prompt = Required(r, "prompt");
             var authors = r.StringList("authors");
             var verdictNames = r.StringList("verdicts");
-            var tokenEnv = Required(r, "token_env");
+            var tokenEnv = r.String("token_env");
+            var authText = r.String("auth");
+            var tenant = r.String("tenant");
             var hooks = r.MapList("hooks").Select(ReadHook).ToList();
             var settings = ReadSettings(r, defaults);
             r.ReportUnknownKeys();
@@ -298,15 +300,39 @@ public static partial class ConfigLoader
             var provider = providerText is null ? null : ParseOne(r, "provider", providerText, Providers);
             var trust = trustText is null ? null : ParseOne(r, "trust", trustText, Trusts);
             var verdicts = verdictNames is null ? [Verdict.Comment] : ParseAll(r, "verdicts", verdictNames, Verdicts);
+            var auth = authText is null ? TokenAuth.Environment : ParseOne(r, "auth", authText, Auths);
 
             if (name is not null && !RepoName().IsMatch(name))
             {
                 r.Report("config.repo_name_invalid", "a repo name is lowercase letters, digits, '.', '-' and '_', because it names folders", "name");
             }
 
-            if (slug is not null && !Slug().IsMatch(slug))
+            if (slug is not null && provider == ProviderKind.AzureDevOps && !AzureDevOpsSlug().IsMatch(slug))
+            {
+                r.Report("config.repo_slug_invalid", "'repo' must be organization/project/repository on Azure DevOps", "repo");
+            }
+            else if (slug is not null && provider != ProviderKind.AzureDevOps && !Slug().IsMatch(slug))
             {
                 r.Report("config.repo_slug_invalid", "'repo' must be owner/name", "repo");
+            }
+
+            // One source of the token: the variable token_env names, or the Azure CLI.
+            if (auth == TokenAuth.AzureCli && tokenEnv is not null)
+            {
+                r.Report("config.auth_conflict", "'auth: azure_cli' gets the token from the Azure CLI, so 'token_env' must go", "token_env");
+            }
+            else if (auth == TokenAuth.Environment && tokenEnv is null)
+            {
+                r.Report("config.required", "'token_env' is required: the variable that holds the token (on Azure DevOps, 'auth: azure_cli' instead)", "token_env");
+            }
+
+            if (tenant is not null && auth != TokenAuth.AzureCli)
+            {
+                r.Report("config.tenant_without_azure_cli", "'tenant' only applies with 'auth: azure_cli'", "tenant");
+            }
+            else if (tenant is not null && !Tenant().IsMatch(tenant))
+            {
+                r.Report("config.tenant_invalid", "'tenant' must be the tenant's id (a GUID) or its domain, such as contoso.onmicrosoft.com", "tenant");
             }
 
             if (authors is null or [])
@@ -324,7 +350,8 @@ public static partial class ConfigLoader
                 r.Report("config.agent_unknown", $"no agent named '{agent}' under 'agents'", "agent");
             }
 
-            if (name is null || provider is null || slug is null || trust is null || agent is null || prompt is null || tokenEnv is null)
+            if (name is null || provider is null || slug is null || trust is null || agent is null || prompt is null || auth is null
+                || (auth == TokenAuth.Environment && tokenEnv is null))
             {
                 continue;
             }
@@ -340,7 +367,9 @@ public static partial class ConfigLoader
                 PromptPath = RtfdHome.ResolvePath(prompt, folder),
                 Authors = authors ?? [],
                 Verdicts = verdicts,
-                TokenEnv = tokenEnv,
+                Auth = auth.Value,
+                TokenEnv = auth == TokenAuth.Environment ? tokenEnv : null,
+                Tenant = tenant,
                 Hooks = hooks,
                 Settings = settings,
             });
@@ -428,6 +457,13 @@ public static partial class ConfigLoader
     {
         ["github"] = ProviderKind.GitHub,
         ["bitbucket"] = ProviderKind.Bitbucket,
+        ["azure_devops"] = ProviderKind.AzureDevOps,
+    };
+
+    private static readonly Dictionary<string, TokenAuth> Auths = new(StringComparer.Ordinal)
+    {
+        ["token_env"] = TokenAuth.Environment,
+        ["azure_cli"] = TokenAuth.AzureCli,
     };
 
     private static readonly Dictionary<string, TrustTier> Trusts = new(StringComparer.Ordinal)
@@ -461,6 +497,13 @@ public static partial class ConfigLoader
 
     [GeneratedRegex("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")]
     private static partial Regex Slug();
+
+    // Azure DevOps project and repository names may hold spaces and most punctuation, never these.
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9-]*/[^/\\?#%:*""<>|\x00-\x1f]+/[^/\\?#%:*""<>|\x00-\x1f]+$")]
+    private static partial Regex AzureDevOpsSlug();
+
+    [GeneratedRegex(@"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)+)$")]
+    private static partial Regex Tenant();
 
     [GeneratedRegex(@"^(\.[A-Za-z_][A-Za-z0-9_]*)+$")]
     private static partial Regex JsonPath();

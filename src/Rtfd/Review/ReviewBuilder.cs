@@ -145,7 +145,7 @@ public static class ReviewBuilder
 
         var severities = inline.Select(c => c.Severity).Concat(general.Select(g => g.Severity)).Concat(validation.Folded.Select(f => f.Severity))
             .Concat(carried.Select(t => t.Severity));
-        var verdict = Decide(severities, context.Diff.IsPartial, context.Repo, context.PullRequest.Author, context.PostingIdentity);
+        var verdict = Decide(severities, context.Diff.IsPartial, context.Repo, context.PullRequest.Author, context.PostingIdentity, context.PullRequest.IsDraft);
         return new ReviewPlan
         {
             // The agent's summary never says whether the PR is ready: rtfd decides, and says so first.
@@ -163,9 +163,10 @@ public static class ReviewBuilder
     /// <summary>
     /// Open Shoulds (this run's, and rtfd's earlier threads still unresolved after this run's
     /// resolves) mean not ready, and a partial review is never ready. The verdict maps to an event, filtered by
-    /// <c>verdicts:</c> and by the self-review check, falling back to a comment.
+    /// <c>verdicts:</c> and by the self-review check, falling back to a comment. Azure DevOps takes
+    /// no vote on a draft ("You cannot vote on draft pull requests"), so a draft there gets a comment.
     /// </summary>
-    public static VerdictDecision Decide(IEnumerable<FindingSeverity> open, bool partial, RepoConfig repo, string author, string postingIdentity)
+    public static VerdictDecision Decide(IEnumerable<FindingSeverity> open, bool partial, RepoConfig repo, string author, string postingIdentity, bool draft = false)
     {
         var blocking = open.Where(s => repo.Settings.NotReadyIfOpen.Contains(s)).OrderBy(s => s).ToList();
         var openText = string.Join(" and ", blocking.GroupBy(s => s).Select(g => Counted(g.Count(), Name(g.Key))));
@@ -188,6 +189,11 @@ public static class ReviewBuilder
         if (string.Equals(author, postingIdentity, StringComparison.OrdinalIgnoreCase))
         {
             return new VerdictDecision(ready, Verdict.Comment, $"{label} ({reason}); {EventName(wanted)} downgraded to COMMENT: the posting identity is the PR author", headline);
+        }
+
+        if (draft && repo.Provider == ProviderKind.AzureDevOps)
+        {
+            return new VerdictDecision(ready, Verdict.Comment, $"{label} ({reason}); {EventName(wanted)} downgraded to COMMENT: Azure DevOps takes no vote on a draft", headline);
         }
 
         return new VerdictDecision(ready, wanted, $"{label} ({reason})", headline);

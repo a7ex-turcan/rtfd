@@ -10,51 +10,70 @@ public sealed record RepoReport(RepoConfig Repo, string? Identity, bool? IsPubli
 /// <summary>
 /// The checks that need the provider (plan Phase 2): each repo's token works and says who rtfd
 /// posts as, the repo is reachable with it, and a public repo doesn't let everyone's PRs reach
-/// the agent while the untrusted tier doesn't exist (spec "Policy").
+/// the agent while the untrusted tier doesn't exist (spec "Policy"). A token from the Azure CLI
+/// is asked for here, so a CLI that isn't logged in shows up before anything else.
 /// </summary>
 public static class ProviderChecks
 {
     public static async Task<(IReadOnlyList<RepoReport> Repos, IReadOnlyList<Diagnostic> Diagnostics)> RunAsync(
-        RtfdConfig config, Func<string, string?> environment, Func<RepoConfig, ProviderToken, IProvider> providers,
+        RtfdConfig config, TokenSources tokens, Func<RepoConfig, TokenSource, IProvider> providers,
         CancellationToken cancellationToken = default)
     {
         var reports = new List<RepoReport>();
         var diagnostics = new List<Diagnostic>();
-        var identities = new Dictionary<string, string>(StringComparer.Ordinal);
-        var refused = new Dictionary<string, string>(StringComparer.Ordinal);
+        var identities = new Dictionary<TokenSource, string>();
+        var refused = new Dictionary<TokenSource, string>();
 
         foreach (var repo in config.Repos)
         {
-            var token = environment(repo.TokenEnv);
-            if (string.IsNullOrEmpty(token))
-            {
-                reports.Add(new RepoReport(repo, null, null, $"{repo.TokenEnv} isn't set"));
-                continue;
-            }
+            var source = tokens.For(repo);
+            var tokenKey = repo.Auth == TokenAuth.AzureCli ? "auth" : "token_env";
+            var from = source.ReadOnce ? $"in {source.Describe}" : $"from {source.Describe}";
 
             void Error(string check, string message, string key) =>
                 diagnostics.Add(new(check, DiagnosticLevel.Error, $"{repo.Name}: {message}", $"{repo.Path}.{key}", config.LineOf($"{repo.Path}.{key}")));
 
-            if (refused.TryGetValue(token, out var earlier))
+            if (refused.TryGetValue(source, out var earlier))
             {
-                Error("provider.token_refused", earlier, "token_env");
+                Error("provider.token_refused", earlier, tokenKey);
                 reports.Add(new RepoReport(repo, null, null, "its token was refused"));
                 continue;
             }
 
-            var provider = providers(repo, new ProviderToken(token));
             try
             {
-                if (!identities.TryGetValue(token, out var identity))
+                await source.GetAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (ProviderException ex) when (ex.NoToken)
+            {
+                // An unset variable is the config checks' warning already; an Azure CLI without a token is news.
+                if (source.ReadOnce)
+                {
+                    reports.Add(new RepoReport(repo, null, null, $"{source.Describe} isn't set"));
+                }
+                else
+                {
+                    refused[source] = ex.Message;
+                    Error("provider.token_refused", ex.Message, tokenKey);
+                    reports.Add(new RepoReport(repo, null, null, "it has no token"));
+                }
+
+                continue;
+            }
+
+            var provider = providers(repo, source);
+            try
+            {
+                if (!identities.TryGetValue(source, out var identity))
                 {
                     try
                     {
-                        identities[token] = identity = await provider.WhoAmIAsync(cancellationToken).ConfigureAwait(false);
+                        identities[source] = identity = await provider.WhoAmIAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch (ProviderException ex)
                     {
-                        refused[token] = $"the token in {repo.TokenEnv} doesn't work: {ex.Message}";
-                        Error("provider.token_refused", refused[token], "token_env");
+                        refused[source] = $"the token {from} doesn't work: {ex.Message}";
+                        Error("provider.token_refused", refused[source], tokenKey);
                         reports.Add(new RepoReport(repo, null, null, "its token was refused"));
                         continue;
                     }
@@ -67,7 +86,7 @@ public static class ProviderChecks
                 }
                 catch (ProviderException ex)
                 {
-                    Error("provider.repo_unreachable", $"{repo.Slug} can't be read with the token in {repo.TokenEnv}: {ex.Message}", "repo");
+                    Error("provider.repo_unreachable", $"{repo.Slug} can't be read with the token {from}: {ex.Message}", "repo");
                     reports.Add(new RepoReport(repo, identity, null, "the repo can't be read"));
                     continue;
                 }

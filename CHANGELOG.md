@@ -9,7 +9,12 @@ major for a breaking change to the CLI, the config file or the findings contract
 
 ## [Unreleased]
 
-Nothing released yet. The design is in `docs/spec.md` and the build order in `docs/plan.md`.
+## [0.1.0-rc.1] - 2026-10-21
+
+The first release candidate of v0: GitHub and Claude Code. `rtfd run` reviews one PR now, and
+`rtfd serve` watches your repos and reviews each new head once. Starting serve at logon
+(`install-service`) comes before 0.1.0. The design is `docs/spec.md` and the build order
+`docs/plan.md`, in the repository.
 
 ### Added
 

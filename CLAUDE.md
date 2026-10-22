@@ -16,7 +16,7 @@ change, and record the reason in `docs/implementation.md`. Don't let them drift.
 
 | Path | Stack | What |
 | --- | --- | --- |
-| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry`, `serve`, `status`, `pause`/`resume` and the `rtfd-git` MCP server today, for GitHub and Azure DevOps; `install-service` to come |
+| `src/Rtfd/` | C# / .NET 10, Native AOT | The single `rtfd` executable: `validate`, `run` (posting and follow-ups), `retry`, `serve`, `status`, `pause`/`resume` and the `rtfd-git` MCP server today, for GitHub, Azure DevOps and Bitbucket; `install-service` to come |
 | `tests/Rtfd.Tests/` | xUnit v3 | Unit tests |
 | `tests/FakeAgent/` | C# | A stand-in agent CLI, built as `claude`, with canned output, for tests |
 
@@ -82,7 +82,16 @@ and recovers each thread on its own. Tokens come from a `TokenSource` (`Provider
 the variable `token_env` names, read once, or the Azure CLI (`auth: azure_cli`), renewed five
 minutes before expiry. Verdicts are votes there. Owner's calls: tokens from the Azure CLI, test
 posts on a scratch draft PR in one of their work repos, votes. Not done yet: votes live (the scratch
-PR is a draft), and a look at how the summary renders on the PR page. Next is Phase 6,
+PR is a draft), and a look at how the summary renders on the PR page.
+
+**Phase 5c, Bitbucket, is built** (2026-10-22, the owner's request, ahead of Phase 6 and v1; plan
+Phase 7's 7a). `Providers/Bitbucket/` talks to Bitbucket Cloud's REST API 2.0 and posts a review a
+comment at a time through 5b's per-thread `Poster`. The summary's marker there is a link reference
+definition (`[//]: # (rtfd ...)`), since Bitbucket shows an HTML comment as text, and the provider
+adds a hidden `[//]: # (rtfd review=<id>)` line to each inline comment and strips it on read, so a
+lost store is rebuilt. `token_env` holds `email:token`; `authors` and the posting identity are
+nicknames. Verdicts are approvals and change requests. Owner's calls: test posts on a scratch draft
+PR in one of their work repos, live vote tests there, each vote taken back. Next is Phase 6,
 `install-service`. Update this section when a phase lands.
 
 ## Hard rules
@@ -125,8 +134,13 @@ check included. No code path posts text that skipped it.
 - On Azure DevOps the sandbox is a scratch draft PR in one of the owner's work repos, named by
   `RTFD_ADO_SANDBOX` and `RTFD_ADO_PR`, and posted to only with `RTFD_LIVE_AZURE_DEVOPS=1`. Every
   other PR in that organization is a real one: posts there wait for the owner, one by one.
-- This repo is public. Never commit an Azure DevOps organization's, project's or repo's names, its
-  ids or its answers. Recordings are rewritten to `contoso` (`Recordings/azure-devops/README.md`).
+- On Bitbucket the sandbox is a scratch draft PR in one of the owner's work repos, named by
+  `RTFD_BB_SANDBOX` and `RTFD_BB_PR`, and posted to only with `RTFD_LIVE_BITBUCKET=1`. Every other
+  PR in that workspace is a real one: posts there wait for the owner, one by one. Everything goes
+  out under the owner's own name there. Never leave a vote on the owner's own PR.
+- This repo is public. Never commit an Azure DevOps organization's, project's or repo's names, a
+  Bitbucket workspace's or repo's, their people, their ids or their answers. Recordings are rewritten
+  to `contoso` (`Recordings/azure-devops/README.md`, `Recordings/bitbucket/README.md`).
 - Don't stop, edit or remove the existing PowerShell watchers or their scheduled tasks on either
   machine. Phase 6 and Phase 7 retire them, with the owner.
 
@@ -185,8 +199,10 @@ Same stack and conventions as the siblings; rtfc's `AGENTS.md` is the fullest st
   `CLAUDE_CONFIG_DIR` and stop Claude before it calls a model.
 - The provider has recorded-response tests; live tests against the sandbox repo need
   `RTFD_LIVE_GITHUB=1`, and against the Azure DevOps scratch PR `RTFD_LIVE_AZURE_DEVOPS=1` (with
-  `RTFD_ADO_SANDBOX`, `RTFD_ADO_PR` and `RTFD_ADO_TENANT` or `ADO_TOKEN`). Crash points are a seam in `FakeProvider` (`PostFailure`), so recovery is
-  tested by a run that dies and the next one.
+  `RTFD_ADO_SANDBOX`, `RTFD_ADO_PR` and `RTFD_ADO_TENANT` or `ADO_TOKEN`), and against the Bitbucket
+  scratch PR `RTFD_LIVE_BITBUCKET=1` (with `RTFD_BB_SANDBOX`, `RTFD_BB_PR` and `BB_TOKEN`). Crash
+  points are a seam in `FakeProvider` (`PostFailure`), so recovery is tested by a run that dies and
+  the next one.
 - CI runs on Windows and Linux. Windows is the primary target.
 - Name tests as sentences: `Git_tools_refuse_an_output_argument`.
 
@@ -306,12 +322,43 @@ Unverified for Azure DevOps: whether the summary's `<!-- rtfd ... -->` marker is
 page, and how a closed summary thread shows there (the API reads both back as sent), and a vote
 round trip on a published PR.
 
+Checked 2026-10-22 on Bitbucket Cloud (REST 2.0), on the owner's work workspace (read-only, then
+posts on the scratch draft PR; `BitbucketLiveTests`):
+
+- `BB_TOKEN` is `email:token` (an Atlassian API token) and works as basic auth for REST. Git over
+  HTTPS refuses the email as the user name; the token part works with `x-bitbucket-api-token-auth`
+  (or the Bitbucket user name). A commit is fetchable by SHA after its branch is deleted.
+- `/user` and every author object carry `display_name`, `nickname`, `uuid` and `account_id`; no
+  email, and no user name on PRs or comments.
+- A PR's `source.commit.hash` and `destination.commit.hash` are 12 characters; `GET /commit/<short>`
+  gives the full SHA. PRs have `draft`.
+- The comment list's `resolution` is `{}` or missing whether resolved or not; the single comment has
+  it (`comment_resolution`, with `user`) and `inline.outdated`. A reply carries its thread's
+  `inline` and may answer a reply. `pending: true` is an unpublished draft comment.
+- `<!-- -->` renders as escaped text; `[//]: # (...)` renders as nothing, and `raw` reads back byte
+  for byte.
+- An inline comment is accepted anywhere: past a file's end, or in a file the PR doesn't touch.
+- Resolving a resolved comment is a 409, resolving a reply a 403. `POST /approve` and
+  `POST /request-changes` replace each other, both work on your own draft, and `DELETE /approve`
+  takes either back; the PR's `participants` give `state` (`approved`, `changes_requested`).
+- The PR list and commit statuses answer `If-None-Match` with 304. A missing PR is a plain-text 404,
+  a bad token an empty 401.
+
+Unverified for Bitbucket: workspace and repository access tokens (bearer for REST, `x-token-auth`
+for git), and where an inline comment lands when the PR moves while rtfd reviews it (the API takes
+no commit to anchor to).
+
+Checked 2026-10-22 on Claude Code 2.1.307: at launch Claude starts a background shell (`uname`,
+`command -v npm yarn pnpm bun deno node`). When `validate`'s probe kills Claude at its init event,
+that shell can outlive the tree kill and hold rtfd's own stdout, which .NET lets every child inherit
+on Windows: rtfd exits in seconds, but a pipe reading its output stays open for minutes. Redirect
+to a file when timing it.
+
 ## Open decisions
 
 Don't settle these silently in code. Raise them.
 
-- The spec's open questions (the name, isolation flags, a dedicated OS account, Bitbucket without a
-  marker).
+- The spec's open questions (the name, isolation flags, a dedicated OS account).
 - Every ❓ in `docs/plan.md`, such as a scheduled task or a Windows service (Phase 6), and how rtfd
   reaches rtfc (Phase 7).
 
@@ -337,6 +384,9 @@ RTFD_LIVE_GITHUB=1 GH_TOKEN="$(gh auth token)" tests/Rtfd.Tests/bin/Debug/net10.
 
 # Posting against Azure DevOps, on the scratch draft PR only (names from the owner, never committed):
 RTFD_LIVE_AZURE_DEVOPS=1 RTFD_ADO_SANDBOX=<org>/<project>/<repo> RTFD_ADO_PR=<n> RTFD_ADO_TENANT=<tenant> tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.AzureDevOpsLiveTests
+
+# Posting against Bitbucket, on the scratch draft PR only (BB_TOKEN is email:token; check only the email part):
+RTFD_LIVE_BITBUCKET=1 RTFD_BB_SANDBOX=<workspace>/<repo> RTFD_BB_PR=<n> tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.BitbucketLiveTests
 
 # The isolation tests against the installed Claude Code, with a scratch user setup (no model call):
 RTFD_LIVE_CLAUDE=1 tests/Rtfd.Tests/bin/Debug/net10.0/Rtfd.Tests.exe -class Rtfd.Tests.LiveClaudeIsolationTests
@@ -403,8 +453,9 @@ rtfc's `src/Rtfc/Core/ClaudeRunner.cs` (headless Claude flags and environment st
 | `src/Rtfd/` (Phases 2 to 4) | `Agents/AgentProbe.cs` and `Config/ProviderChecks.cs` (validate) · `State/` the SQLite store and `schema.sql` · `Posting/` Poster (write-ahead posting, replies, resolves, recovery), StoreHooks (one review per head, attempts), ReviewHistory (the last review and rtfd's threads, rebuilt from markers when lost) · `Git/Interdiff.cs` · `Review/OwnThreads.cs` |
 | `src/Rtfd/` (Phase 5) | `Serve/` ServeHost (startup checks, a loop per repo, the heartbeat), RepoWatcher (one tick: flags, lock, poll, store, one review, the startup sweep), ChangeDetector, FileLock, ServeLog, StatusFile · `Runs/LiveRun.cs` (the live path of `run` and `serve`) · `Processes/ChildProcessJob.cs` · `Cli/` ServeCommand, StatusCommand, PauseCommand |
 | `src/Rtfd/` (Phase 5b) | `Providers/AzureDevOps/` (the provider and its JSON) · `Providers/TokenSource.cs` (a variable read once, the Azure CLI renewed, shared per repo) · `Providers/ProviderFactory.cs` · `Posting/Poster.cs`' per-thread path |
+| `src/Rtfd/` (Phase 5c) | `Providers/Bitbucket/` (the provider and its JSON; the hidden review line on inline comments) · `Poster.Marker`'s Bitbucket form · `ProviderToken.Secrets` (the token part of `email:token`) |
 | `src/Rtfd/Resources/` | gitleaks' rules as JSON, made by `scripts/gitleaks-rules.cs` from a pinned tag, and gitleaks' licence |
-| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, or a thread at a time as Azure DevOps does; crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand), RecordedHandler, ThrowingProvider · `Recordings/github/` real GitHub answers, trimmed · `Recordings/azure-devops/` Azure DevOps' shapes with every name replaced |
+| `tests/Rtfd.Tests/` | `TempHome` (a throwaway home with its own environment) and `Configs` (a minimal valid config to change one thing in) · `Support/` GitFixture (a real git remote), FakeProvider (reviews, comments and threads as GitHub keeps them, or a thread at a time as Azure DevOps and Bitbucket do; crash seams), FakeAgent, RunHarness, ManualClock (serve's waits by hand), RecordedHandler, ThrowingProvider · `Recordings/github/` real GitHub answers, trimmed · `Recordings/azure-devops/` and `Recordings/bitbucket/` their shapes with every name replaced |
 | `tests/FakeAgent/` | The stand-in agent, built as `claude`: canned output per scenario, records its args, environment, stdin and the run folder's inputs |
 | `.github/workflows/ci.yml` | Build, test and format on Windows and Linux; the AOT publish and checks against the published binary. Also called by the release |
 | `.github/workflows/release.yml` | A `vX.Y.Z` tag: the version checks, `ci.yml`, a Native AOT archive per platform, smoke-tested, and a GitHub Release with the changelog section as notes. Run by hand, a rehearsal that publishes nothing |

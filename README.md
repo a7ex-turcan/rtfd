@@ -10,7 +10,7 @@ Sibling of [rtfm](https://github.com/a7ex-turcan/rtfm) (docs),
 
 **Status: early. It watches, reviews, posts and follows up.** `rtfd serve` watches every configured
 repo and reviews each new head once, when the pushes have settled and CI has finished; `rtfd status`
-says whether it is watching. `rtfd run <repo> --pr <n>` reviews one GitHub or Azure DevOps PR with Claude Code now,
+says whether it is watching. `rtfd run <repo> --pr <n>` reviews one GitHub, Azure DevOps or Bitbucket PR with Claude Code now,
 posting once, crash-safe, and reading it back; `--dry-run` prints it instead. After a push, rtfd
 reviews only what changed and resolves its own threads the author fixed. `rtfd validate` checks the
 config, the tokens and exactly what the agent loads. Starting `serve` at logon (`install-service`)
@@ -34,7 +34,8 @@ posted when you're happy with it.
   login is what works. An `ANTHROPIC_API_KEY` set only in your environment doesn't reach it.
 - **A GitHub token that can read your repo.** The easiest is the GitHub CLI's: `gh auth token`.
   On Azure DevOps, the Azure CLI logged in to your organization's tenant, or a PAT (see
-  [On Azure DevOps](#on-azure-devops)).
+  [On Azure DevOps](#on-azure-devops)). On Bitbucket, an Atlassian API token (see
+  [On Bitbucket](#on-bitbucket)).
 
 Tested on Windows 11 with Claude Code 2.1.296 and git 2.47.
 
@@ -308,6 +309,33 @@ Azure DevOps Services repos work the same way, with a few differences in the con
 - **The verdict is a vote**: approve is "Approved", request changes "Waiting for author". Never on
   your own PR, and never on a draft, which Azure DevOps doesn't allow.
 
+### On Bitbucket
+
+Bitbucket Cloud repos work the same way too:
+
+```yaml
+  - name: web-app
+    provider: bitbucket
+    repo: contoso/web-app                  # workspace/repository
+    trust: trusted
+    agent: claude
+    prompt: prompts/review.md
+    authors: [Ada Lovelace, grace.hopper]  # nicknames, as Bitbucket shows them on your profile
+    verdicts: [comment, approve, request_changes]
+    token_env: BB_TOKEN                    # holding email:token
+```
+
+- **The token.** Make an Atlassian API token with Bitbucket scopes (read the account, read
+  repositories, read and write pull requests) and put `your-email:the-token` in the variable. rtfd
+  sends it as basic auth, and git gets the token part only. `rtfd validate` says who it posts as.
+- **Authors are nicknames.** Bitbucket shows no email or user name on a PR, so `authors` lists the
+  nickname each account goes by; `rtfd validate` prints yours.
+- **The review** is a summary comment and a comment per inline comment. Each ends with a line
+  Bitbucket doesn't show (`[//]: # (rtfd ...)`), which lets rtfd rebuild what it reviewed if its
+  state is ever lost. A crash halfway through posts only what didn't land.
+- **The verdict** is Bitbucket's Approve or Request changes. Never on your own PR, though Bitbucket
+  would take it.
+
 ### Where things go
 
 Everything rtfd writes lives under its data folder: the home, unless `data_dir` in the config
@@ -343,6 +371,8 @@ points elsewhere.
 | `not watched until serve restarts` | A token is missing or refused: fix it and restart serve |
 | `the Azure CLI ... gave no token` | Run `az login --tenant <tenant>`; serve picks it up on its next try, no restart |
 | `Azure DevOps refused the token ... sign-in page` | The token is for another tenant: set `tenant` to your organization's |
+| `Bitbucket refused the token in BB_TOKEN (401)` | The variable must hold `email:token`, with your Atlassian account's email; the token may have expired |
+| `Bitbucket refused ... (403)` | The token lacks a scope (pull requests need read and write), or access to the repo |
 
 ---
 
@@ -356,7 +386,7 @@ steer an agent that held a token with write access. rtfd solves them once.
 
 ## What it does
 
-- **Watches PRs** on GitHub and Azure DevOps (Bitbucket next), waits for the pushes to settle and for CI to finish, and
+- **Watches PRs** on GitHub, Azure DevOps and Bitbucket, waits for the pushes to settle and for CI to finish, and
   starts one review per new head.
 - **Runs your agent read-only** on a checkout of the PR, with the diff, the CI state and the open
   review threads handed to it as files.
@@ -429,8 +459,8 @@ each one is in the spec.
   PRs, then `validate`, posting, follow-ups, `serve` and the service.
 - **Azure DevOps**, ahead of v1: the same reviews on Azure DevOps Services, with tokens from the
   Azure CLI. Built.
-- **v1: Bitbucket + Copilot CLI.** Plus other reviewers' threads as context, and notifications
-  through rtfc.
+- **Bitbucket**, ahead of v1: the same reviews on Bitbucket Cloud. Built.
+- **v1: Copilot CLI.** Plus other reviewers' threads as context, and notifications through rtfc.
 - **Later:** pre-review hooks (build, browser checks), an untrusted tier for public repos open to
   anyone, code suggestions, webhooks, GitLab.
 

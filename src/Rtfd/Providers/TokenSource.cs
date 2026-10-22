@@ -259,5 +259,5 @@ public sealed class TokenSources(Func<string, string?> environment, Func<string?
     /// repo's variable, and each token the Azure CLI has handed over so far.
     /// </summary>
     public IReadOnlyList<string> Known(RtfdConfig config) =>
-        [.. config.Repos.Select(For).Select(s => s.Current?.Value).OfType<string>().Where(t => t.Length > 0).Distinct()];
+        [.. config.Repos.Select(For).Select(s => s.Current).OfType<ProviderToken>().SelectMany(t => t.Secrets).Where(t => t.Length > 0).Distinct()];
 }

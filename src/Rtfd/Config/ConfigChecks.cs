@@ -148,11 +148,6 @@ public static partial class ConfigChecks
 
     private static void CheckRepo(RepoConfig repo, Func<string, string?> environment, Report report)
     {
-        if (repo.Provider == ProviderKind.Bitbucket)
-        {
-            report.Error("config.provider_unsupported", "Bitbucket arrives in v1; this build talks to GitHub and Azure DevOps", $"{repo.Path}.provider");
-        }
-
         if (repo.Auth == TokenAuth.AzureCli && repo.Provider != ProviderKind.AzureDevOps)
         {
             report.Error("config.auth_unsupported",

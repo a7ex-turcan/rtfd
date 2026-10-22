@@ -1,0 +1,23 @@
+{
+  "type": "repository",
+  "full_name": "contoso/web-app",
+  "links": {
+    "html": { "href": "https://bitbucket.org/contoso/web-app" },
+    "clone": [
+      { "name": "https", "href": "https://patreviewer1@bitbucket.org/contoso/web-app.git" },
+      { "name": "ssh", "href": "git@bitbucket.org:contoso/web-app.git" }
+    ]
+  },
+  "name": "web-app",
+  "slug": "web-app",
+  "is_private": true,
+  "scm": "git",
+  "mainbranch": { "name": "main", "type": "branch" },
+  "uuid": "{5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d}",
+  "workspace": { "type": "workspace", "uuid": "{6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e}", "name": "Contoso", "slug": "contoso" },
+  "created_on": "2025-02-10T08:00:00.000000+00:00",
+  "updated_on": "2026-10-21T15:30:00.000000+00:00",
+  "size": 1048576,
+  "language": "c#",
+  "fork_policy": "no_public_forks"
+}

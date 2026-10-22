@@ -1,0 +1,24 @@
+{
+  "id": 5007,
+  "created_on": "2026-10-20T12:07:00.000000+00:00",
+  "updated_on": "2026-10-20T12:07:00.000000+00:00",
+  "content": { "type": "rendered", "raw": "Is this wording clear enough?", "markup": "markdown", "html": "<p>Is this wording clear enough?</p>" },
+  "user": { "display_name": "Sam Author", "type": "user", "uuid": "{1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a}", "account_id": "712020:2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e", "nickname": "sam.author" },
+  "deleted": false,
+  "inline": {
+    "from": null,
+    "to": 3,
+    "path": "docs/Counting Guide.md",
+    "start_from": null,
+    "start_to": null,
+    "outdated": false,
+    "context_lines": "",
+    "src_rev": "4f2c8e1a9b7d",
+    "dest_rev": "9b8a7c6d5e4f",
+    "base_rev": null
+  },
+  "pending": false,
+  "type": "pullrequest_comment",
+  "links": { "html": { "href": "https://bitbucket.org/contoso/web-app/pull-requests/7/_/diff#comment-5007" } },
+  "pullrequest": { "type": "pullrequest", "id": 7, "title": "Count by any amount" }
+}

@@ -16,6 +16,13 @@ public sealed class ProviderToken(string value)
     /// <summary>An Entra ID (OAuth) access token rather than a PAT: a JWT, three base64url parts, the first a JSON header.</summary>
     internal bool IsJwt => Value.StartsWith("eyJ", StringComparison.Ordinal) && Value.Count(c => c == '.') == 2;
 
+    /// <summary>
+    /// What must never leave rtfd: the value, and for <c>user:secret</c> (Bitbucket's
+    /// <c>email:token</c>) the secret on its own too, since git and a careless paste use it alone.
+    /// </summary>
+    internal IEnumerable<string> Secrets =>
+        Value.IndexOf(':', StringComparison.Ordinal) is var colon and >= 0 ? [Value, Value[(colon + 1)..]] : [Value];
+
     public override string ToString() => "[token]";
 }
 
@@ -141,7 +148,7 @@ public enum ReviewPosting
     /// <summary>GitHub: the summary, the event and every inline comment in one request, which lands whole or not at all.</summary>
     Atomic,
 
-    /// <summary>Azure DevOps: a thread per request, the summary first, then the vote. A crash can leave part of a review.</summary>
+    /// <summary>Azure DevOps and Bitbucket: a thread per request, the summary first, then the vote. A crash can leave part of a review.</summary>
     PerThread,
 }
 
@@ -151,7 +158,7 @@ public enum ReviewPosting
 /// <param name="ReviewId">The summary's thread, kept on each inline thread, so a lost store can find which review a thread came from.</param>
 public sealed record ThreadPost(int Number, string CommitId, string Body, ReviewPostComment? Inline, string? ReviewId);
 
-/// <summary>A provider adapter (spec "Provider adapter"): GitHub and Azure DevOps.</summary>
+/// <summary>A provider adapter (spec "Provider adapter"): GitHub, Azure DevOps and Bitbucket.</summary>
 public interface IProvider
 {
     ReviewPosting Posting { get; }

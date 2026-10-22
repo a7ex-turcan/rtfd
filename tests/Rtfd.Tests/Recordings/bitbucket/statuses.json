@@ -1,0 +1,43 @@
+{
+  "values": [
+    {
+      "key": "ci/circleci: test",
+      "type": "build",
+      "state": "SUCCESSFUL",
+      "name": "ci/circleci: test",
+      "refname": null,
+      "commit": { "hash": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e", "type": "commit" },
+      "url": "https://circleci.com/bb/contoso/web-app/101",
+      "description": "Your tests passed on CircleCI!",
+      "created_on": "2026-10-20T11:30:01.250000+00:00",
+      "updated_on": "2026-10-20T11:33:12.500000+00:00"
+    },
+    {
+      "key": "ci/circleci: sonarcloud",
+      "type": "build",
+      "state": "INPROGRESS",
+      "name": "ci/circleci: sonarcloud",
+      "refname": null,
+      "commit": { "hash": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e", "type": "commit" },
+      "url": "https://circleci.com/bb/contoso/web-app/102",
+      "description": "Your tests are queued behind your running builds.",
+      "created_on": "2026-10-20T11:33:13.000000+00:00",
+      "updated_on": "2026-10-20T11:33:13.000000+00:00"
+    },
+    {
+      "key": "sonarcloud",
+      "type": "build",
+      "state": "STOPPED",
+      "name": null,
+      "refname": null,
+      "commit": { "hash": "4f2c8e1a9b7d6c5e3f1a2b4c6d8e0f1a3b5c7d9e", "type": "commit" },
+      "url": "https://sonarcloud.io/dashboard?id=contoso_web-app&pullRequest=7",
+      "description": "",
+      "created_on": "2026-10-20T11:34:00.000000+00:00",
+      "updated_on": "2026-10-20T11:34:00.000000+00:00"
+    }
+  ],
+  "pagelen": 100,
+  "size": 3,
+  "page": 1
+}

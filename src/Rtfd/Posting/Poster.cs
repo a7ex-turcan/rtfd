@@ -50,7 +50,7 @@ public sealed record PostOutcome(PostStatus Status, string? ReviewId, string? Ur
 /// each request, the ids that came back; at the end the review and the replies are read back and
 /// checked. A posting a crash left open is matched against the posting identity's reviews and
 /// replies by body hash: what landed isn't sent again, and what didn't is sent from the record.
-/// On a provider that takes a review a thread at a time (Azure DevOps) that goes for each
+/// On a provider that takes a review a thread at a time (Azure DevOps, Bitbucket) that goes for each
 /// thread: a crash after two of five comments ends with the other three posted, never with five
 /// more (spec decision 71).
 /// </summary>
@@ -61,17 +61,23 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
     /// <summary>Allowance for the provider's clock running behind ours when matching after a crash.</summary>
     private static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(10);
 
+    private const string MarkerFields = "rtfd sha=(?<head>[0-9a-f]{40}(?:[0-9a-f]{24})?)(?: base=(?<base>[0-9a-f]{40}(?:[0-9a-f]{24})?))? run=[0-9]{1,18}";
+
     private static readonly Regex MarkerPattern = new(
-        "<!-- rtfd sha=(?<head>[0-9a-f]{40}(?:[0-9a-f]{24})?)(?: base=(?<base>[0-9a-f]{40}(?:[0-9a-f]{24})?))? run=[0-9]{1,18} -->",
-        RegexOptions.NonBacktracking | RegexOptions.CultureInvariant);
+        $@"<!-- {MarkerFields} -->|\[//\]: # \({MarkerFields}\)", RegexOptions.NonBacktracking | RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The hidden marker in the review body (spec "A lost state store"): an HTML comment GitHub
-    /// doesn't render, so there is no visible bot marker. It names the head and its merge base, so
-    /// a lost store can be rebuilt with what the next interdiff needs.
+    /// doesn't render, so there is no visible bot marker. Bitbucket shows an HTML comment as text,
+    /// so there it is a link reference definition, which renders as nothing (checked 2026-10-22).
+    /// It names the head and its merge base, so a lost store can be rebuilt with what the next
+    /// interdiff needs.
     /// </summary>
-    public static string Marker(string head, string? mergeBase, long runId) =>
-        mergeBase is null ? $"<!-- rtfd sha={head} run={runId} -->" : $"<!-- rtfd sha={head} base={mergeBase} run={runId} -->";
+    public static string Marker(string head, string? mergeBase, long runId, ProviderKind provider = ProviderKind.GitHub)
+    {
+        var fields = mergeBase is null ? $"rtfd sha={head} run={runId}" : $"rtfd sha={head} base={mergeBase} run={runId}";
+        return provider == ProviderKind.Bitbucket ? $"[//]: # ({fields})" : $"<!-- {fields} -->";
+    }
 
     /// <summary>The head and merge base a review body's marker names, or null for a body without one.</summary>
     public static LastReview? ParseMarker(string body) =>
@@ -86,7 +92,7 @@ public sealed class Poster(StateStore store, IProvider provider, RepoConfig repo
     public async Task<PostOutcome> PostAsync(
         long runId, PullRequest pr, string head, string? mergeBase, string identity, ReviewPlan plan, CancellationToken cancellationToken = default)
     {
-        var summary = $"{plan.Summary}\n\n{Marker(head, mergeBase, runId)}";
+        var summary = $"{plan.Summary}\n\n{Marker(head, mergeBase, runId, repo.Provider)}";
         var bodies = new List<PostedBody> { new(0, null, null, null, null, summary, Hash(summary), null) };
         foreach (var comment in plan.Inline)
         {

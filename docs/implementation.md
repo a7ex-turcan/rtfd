@@ -4,6 +4,59 @@ Where the code goes further than [`spec.md`](spec.md) says, or settles something
 open, and why. The spec is updated in the same change (its "Decisions taken" log, from 42 on);
 this file keeps the reasoning that doesn't belong in the design. Newest first.
 
+## Phase 5c: Bitbucket (2026-10-22)
+
+### What the real workspace showed
+
+Checked read-only against the owner's work workspace first, then with posts on a scratch draft PR
+(none of its names are in this repo):
+
+- `GET /user` and every author object carry a display name, a nickname, a uuid and an account id,
+  never an email or a user name. The PR list has no user name either, so the nickname is the posting
+  identity and what `authors` lists; the uuid only matches the identity's own participant entry.
+- A PR names its head and base by their first 12 characters. `GET /commit/<short>` gives the full
+  SHA, which the provider keeps per short hash, so a poll asks once per new head, not every tick.
+- The comment list's `resolution` is `{}` or missing whether a thread is resolved or not (six of
+  seven resolved threads disagreed on one real PR); the single comment has it, and `inline.outdated`.
+  So `GetReviewThreadsAsync` reads each thread's first comment on its own. That is one request per
+  inline thread, at review time only, never on a poll.
+- `<!-- -->` renders as escaped text, its SHA turned into a link. `[//]: # (...)`, a link reference
+  definition, renders as nothing, and the raw text reads back byte for byte. That made the spec's
+  open question 4 moot.
+- An inline comment is accepted anywhere: line 99 of a 19-line file, a file the PR doesn't touch.
+  No 422 ever says an anchor is wrong, so the validator is the only guard, as it already is.
+- Resolving twice is a 409 ("Comment has already been resolved."), resolving a reply a 403.
+  Approving your own draft works over REST; approve and request changes replace each other, and
+  `DELETE /approve` takes either back.
+- Git over HTTPS refuses `email:token` as basic auth; the token works with the user name
+  `x-bitbucket-api-token-auth` (or the Bitbucket user name). A commit is fetchable by SHA after its
+  branch is deleted.
+- The PR list and statuses answer `If-None-Match` with 304. A missing PR is a plain-text 404, a bad
+  token an empty 401, so error messages come from rtfd's own wording when the body isn't JSON.
+
+### The marker became provider-specific
+
+`Poster.Marker` takes the provider: GitHub and Azure DevOps keep the HTML comment, Bitbucket gets a
+link reference definition with the same fields. `ParseMarker` reads either form, strictly (a mixed
+`[//]: # (... -->` isn't one). The inline comments needed a link to their summary for the rebuild,
+the job Azure DevOps' `rtfd.review` property does. Bitbucket has no properties, and the hidden line
+can't go in `Poster`'s bodies: their hashes are recorded before the summary's id exists. So the
+provider appends `[//]: # (rtfd review=<id>)` when it posts with a `ReviewId`, and strips it from
+every body it returns, and `Poster`, the read-back and the rebuild see the same bodies on every
+provider.
+
+### Small things
+
+- `ProviderToken.Secrets` gives the secret check and the environment filter the token part of
+  `email:token` on its own: git sends only that part, and someone pasting it would paste it alone.
+- `ProviderFactory` no longer refuses an unbuilt provider, and `config.provider_unsupported` is
+  gone: all three providers are built.
+- While testing, a piped `rtfd validate` kept its pipe open for minutes after it exited: Claude Code
+  starts a background shell (`uname`, `command -v npm ...`) at launch, the agent probe kills Claude
+  at its init event, and the shell, which escaped the tree kill, holds rtfd's own stdout, which .NET
+  lets every child inherit on Windows. rtfd itself exits at once; a terminal or a file isn't held.
+  Not fixed here.
+
 ## Phase 5b: Azure DevOps (2026-10-21)
 
 ### What the real organization showed

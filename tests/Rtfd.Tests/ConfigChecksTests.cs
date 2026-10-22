@@ -39,14 +39,24 @@ public class ConfigChecksTests
     }
 
     [Fact]
-    public void Bitbucket_is_refused_until_v1()
+    public void A_Bitbucket_repo_with_its_token_in_a_variable_passes()
     {
         using var temp = new TempHome();
-        temp.Set("GH_TOKEN", "set");
+        temp.Set("BB_TOKEN", "author@contoso.com:set");
 
-        var diagnostics = temp.Validate(Configs.Minimal().Replace("provider: github", "provider: bitbucket"));
+        var diagnostics = temp.Validate(Configs.Minimal().Replace("provider: github", "provider: bitbucket").Replace("token_env: GH_TOKEN", "token_env: BB_TOKEN"));
 
-        Assert.Equal("config.provider_unsupported", Assert.Single(diagnostics).Check);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void A_Bitbucket_repo_can_t_get_its_token_from_the_Azure_CLI()
+    {
+        using var temp = new TempHome();
+
+        var diagnostics = temp.Validate(Configs.Minimal().Replace("provider: github", "provider: bitbucket").Replace("token_env: GH_TOKEN", "auth: azure_cli"));
+
+        Assert.Equal("config.auth_unsupported", Assert.Single(diagnostics).Check);
     }
 
     [Theory]

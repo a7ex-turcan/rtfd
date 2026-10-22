@@ -106,6 +106,19 @@ jobs:
           if ($LASTEXITCODE -ne 1 -or $out -notmatch 'config\.auth_unsupported') { throw "auth: azure_cli on GitHub was not refused:`n$out" }
           exit 0
 
+      - name: The published binary takes a Bitbucket repo
+        shell: pwsh
+        run: |
+          $home_ = Join-Path $env:RUNNER_TEMP rtfd-bitbucket
+          New-Item -ItemType Directory -Force (Join-Path $home_ prompts) | Out-Null
+          Copy-Item examples/prompts/review.md (Join-Path $home_ prompts)
+          $env:RTFD_HOME = $home_
+          $repo = "  - name: api`n    provider: bitbucket`n    repo: contoso/api`n    trust: trusted`n    agent: claude`n    prompt: prompts/review.md`n    authors: [Ada Lovelace]`n    verdicts: [comment, approve, request_changes]`n    token_env: BB_TOKEN`n"
+          Set-Content (Join-Path $home_ rtfd.yaml) ((Get-Content examples/rtfd.yaml -Raw) + $repo) -NoNewline
+          $out = ./publish/rtfd.exe validate --config-only | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "a Bitbucket repo was refused:`n$out" }
+          exit 0
+
       - name: The published binary opens the state store
         shell: pwsh
         run: |

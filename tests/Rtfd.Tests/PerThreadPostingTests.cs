@@ -34,6 +34,7 @@ public sealed class PerThreadPostingTests : IDisposable
     {
         _h.Set("RTFD_HOME", _h.Home.Root);
         _h.Set("ADO_TOKEN", Tokens.Random(52));
+        _h.Set("BB_TOKEN", "reviewer@contoso.com:" + Tokens.Random(60));
         _h.Git.Commit("Start", new Dictionary<string, string?> { ["README.md"] = "Stats.\n" });
         _h.Git.Branch("feature");
         var head = _h.Git.Commit("Add stats", new Dictionary<string, string?> { ["src/stats.py"] = string.Join('\n', Lines) + "\n" });
@@ -53,12 +54,13 @@ public sealed class PerThreadPostingTests : IDisposable
         return $$"""{"schema_version": 1, "summary": "Stats need care.", "findings": [{{string.Join(", ", items)}}]}""";
     }
 
-    private (int Code, string Stdout, string Stderr) Run(string repoExtra = "")
+    /// <param name="bitbucket">The repo is on Bitbucket, which also takes a review a comment at a time; otherwise Azure DevOps.</param>
+    private (int Code, string Stdout, string Stderr) Run(string repoExtra = "", bool bitbucket = false)
     {
         var yaml = _h.Yaml(repoExtra)
-            .Replace("provider: github", "provider: azure_devops", StringComparison.Ordinal)
-            .Replace("repo: owner/repo", "repo: contoso/Fabrikam Fiber/repo", StringComparison.Ordinal)
-            .Replace("token_env: GH_TOKEN", "token_env: ADO_TOKEN", StringComparison.Ordinal)
+            .Replace("provider: github", bitbucket ? "provider: bitbucket" : "provider: azure_devops", StringComparison.Ordinal)
+            .Replace("repo: owner/repo", bitbucket ? "repo: contoso/repo" : "repo: contoso/Fabrikam Fiber/repo", StringComparison.Ordinal)
+            .Replace("token_env: GH_TOKEN", bitbucket ? "token_env: BB_TOKEN" : "token_env: ADO_TOKEN", StringComparison.Ordinal)
             .Replace("authors: [owner]", "authors: [author@contoso.com]", StringComparison.Ordinal);
         _h.Home.WriteConfig(yaml);
         var stdout = new StringWriter();
@@ -202,5 +204,25 @@ public sealed class PerThreadPostingTests : IDisposable
 
         Assert.Equal(_pr.HeadSha, last?.Head);
         Assert.Equal([("should", 2), ("minor", 8)], rows.Select(r => (r.Severity, r.Line!.Value)));
+    }
+
+    /// <summary>Bitbucket shows an HTML comment as text, so its marker is a link reference definition, which it renders as nothing.</summary>
+    [Fact]
+    public async Task On_Bitbucket_the_summary_s_marker_is_a_link_reference_and_a_lost_store_rebuilds_from_it()
+    {
+        _h.Agent.Responds(FakeAgent.Findings(Findings(("should", 2), ("minor", 8))));
+
+        var (code, stdout, _) = Run(bitbucket: true);
+
+        Assert.Equal(EntryPoint.Ok, code);
+        var summary = Assert.Single(Provider.Reviews);
+        Assert.Matches($@"\n\n\[//\]: # \(rtfd sha={_pr.HeadSha} base=[0-9a-f]{{40}} run=\d+\)$", summary.Body);
+        Assert.DoesNotContain("<!--", summary.Body, StringComparison.Ordinal);
+        Assert.Contains("Read back from Bitbucket: the summary and every inline comment are there as sent.", stdout, StringComparison.Ordinal);
+
+        var threads = await Provider.GetReviewThreadsAsync(7, TestContext.Current.CancellationToken);
+        var (last, rows) = await ReviewHistory.RebuildAsync(Provider, 7, "reviewer@contoso.com", threads, DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        Assert.Equal(_pr.HeadSha, last?.Head);
+        Assert.Equal(2, rows.Count);
     }
 }

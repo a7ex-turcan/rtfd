@@ -1,0 +1,29 @@
+{
+  "id": 5003,
+  "created_on": "2026-10-20T11:40:02.000000+00:00",
+  "updated_on": "2026-10-20T11:40:02.000000+00:00",
+  "content": {
+    "type": "rendered",
+    "raw": "Could: keep the guard against a missing amount.\n\n[//]: # (rtfd review=5001)",
+    "markup": "markdown",
+    "html": "<p>Could: keep the guard against a missing amount.</p>"
+  },
+  "user": { "display_name": "Pat Reviewer", "type": "user", "uuid": "{0c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5}", "account_id": "557058:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "nickname": "Pat Reviewer" },
+  "deleted": false,
+  "inline": {
+    "from": 4,
+    "to": null,
+    "path": "src/counter.py",
+    "start_from": null,
+    "start_to": null,
+    "outdated": true,
+    "context_lines": "",
+    "src_rev": "4f2c8e1a9b7d",
+    "dest_rev": "9b8a7c6d5e4f",
+    "base_rev": null
+  },
+  "pending": false,
+  "type": "pullrequest_comment",
+  "links": { "html": { "href": "https://bitbucket.org/contoso/web-app/pull-requests/7/_/diff#comment-5003" } },
+  "pullrequest": { "type": "pullrequest", "id": 7, "title": "Count by any amount" }
+}

@@ -22,6 +22,13 @@ major for a breaking change to the CLI, the config file or the findings contract
   verdict is a vote: approve gives "Approved", request changes "Waiting for author". There's no vote
   on your own PR or on a draft. A crash partway through a review posts only the comments that
   didn't land.
+- Bitbucket Cloud. A repo with `provider: bitbucket` and `repo: workspace/repository` works with
+  `run`, `serve`, `validate`, `status` and follow-ups. `token_env` names a variable holding
+  `email:token`, an Atlassian API token, and `authors` are Bitbucket nicknames.
+- On Bitbucket a review is a summary comment and a comment per inline comment, and the verdict is
+  Bitbucket's Approve or Request changes, never on your own PR. Each comment ends with a line
+  Bitbucket doesn't show, so rtfd can rebuild what it reviewed if its state is lost, and a crash
+  partway through posts only the comments that didn't land.
 
 ## [0.1.0-rc.1] - 2026-10-21
 

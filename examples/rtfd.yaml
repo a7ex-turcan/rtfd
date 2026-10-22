@@ -58,3 +58,14 @@ repos:
   #   verdicts: [comment, approve, request_changes]   # votes; never on your own PR or a draft
   #   auth: azure_cli                        # a token from `az`, renewed; or token_env with a PAT
   #   tenant: contoso.onmicrosoft.com        # your organization's tenant, if not az's default
+
+  # A Bitbucket repo looks like this:
+  # - name: api
+  #   provider: bitbucket
+  #   repo: contoso/api                      # workspace/repository
+  #   trust: trusted
+  #   agent: claude
+  #   prompt: prompts/review.md
+  #   authors: [Ada Lovelace]                # Bitbucket nicknames
+  #   verdicts: [comment, approve, request_changes]   # Approve and Request changes; never on your own PR
+  #   token_env: BB_TOKEN                    # holding email:token, an Atlassian API token

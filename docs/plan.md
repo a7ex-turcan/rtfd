@@ -41,8 +41,9 @@ Four rules govern the sequence:
 | **4** | Follow-ups | A fixed thread gets "Looks good now." and is resolved; only the interdiff is reviewed | v0 step 4 |
 | **5** | `serve` | 48 h unattended (the sandbox; nutrx at Phase 6's switchover): every new head reviewed once, none twice | v0 step 5 |
 | **5b** | Azure DevOps | `run` and `serve` review Azure DevOps PRs as they do GitHub's, with tokens from the Azure CLI | Azure DevOps, ahead of v1 |
+| **5c** | Bitbucket | `run` and `serve` review Bitbucket Cloud PRs as they do GitHub's, a lost store included | Bitbucket, ahead of v1 |
 | **6** | `install-service` | Survives reboot, battery and 72 h with no window; personal scripts retired. **v0 done** | v0 step 6 |
-| **7** | v1: Bitbucket + Copilot | The work watchers that need no browser check are retired | v1 |
+| **7** | v1: Copilot | The work watchers that need no browser check are retired | v1 |
 | | Later | One item at a time, each when something real needs it | Later |
 
 The order is strict until Phase 3. Phases 4 and 5 touch different code (threads and interdiff vs
@@ -64,7 +65,7 @@ Directory.Packages.props     central package versions
 src/Rtfd/
   Cli/                       hand-rolled dispatcher, one class per command
   Config/                    YAML to typed model (YamlDotNet node model, mapped by hand), checks
-  Providers/                 IProvider, token sources; GitHub/ (REST + GraphQL); AzureDevOps/ (REST); Bitbucket/ in v1
+  Providers/                 IProvider, token sources; GitHub/ (REST + GraphQL); AzureDevOps/ (REST); Bitbucket/ (REST)
   Git/                       GitRunner (hardened env), mirror, worktrees, diff model, interdiff
   GitTools/                  the rtfd-git MCP server (hand-rolled JSON-RPC)
   Processes/                 ProcessRunner (allowlisted env, tree kill), ChildEnvironment
@@ -113,7 +114,8 @@ line numbers. Nothing touches the network, git or an agent yet.
 6. **Static config checks**, each a named diagnostic (`config.hooks_unsupported`):
    - `trust: untrusted` is refused (the tier doesn't exist yet);
    - `hooks:` is refused until hooks ship;
-   - `provider: bitbucket` and agents other than claude are refused until v1;
+   - `provider: bitbucket` and agents other than claude are refused until v1; *(Bitbucket is
+     accepted since Phase 5c.)*
    - `context_tools` are refused until they ship;
    - the guards a config can't loosen (spec decision 41): an agent's CLI comes from its command's
      executable, and a shell or wrapper is refused; the command may not set flags rtfd renders
@@ -579,7 +581,7 @@ draft PR in one of their work repos, and verdicts as votes.
    iteration, CI from build policies and statuses, the head fetched by SHA (there's no head ref).
 2. **Posting a thread at a time** (spec decision 71): `IProvider.Posting` says whether a review is
    one request or a thread each; `Poster` records each thread's id as it comes back and recovers body
-   by body. This is the generalisation Phase 7's Bitbucket needs too.
+   by body. Phase 5c's Bitbucket uses it too.
 3. **Votes** for approve and request changes (decision 72), with the self-review check and no vote
    on a draft.
 4. **Token sources** (decision 70): `token_env` read once, or `auth: azure_cli` with a `tenant`,
@@ -616,6 +618,60 @@ draft PR in one of their work repos, and verdicts as votes.
 - ✔ Verdicts as votes (the owner, 2026-10-21).
 - ⚠ Whether Azure DevOps hides the marker's `<!-- -->` in the summary, and how a closed summary
   thread shows on the PR page, need a look at the page; the API reads them back as sent.
+
+---
+
+## Phase 5c: Bitbucket
+
+**Goal:** everything rtfd does on GitHub, on Bitbucket Cloud, as the owner asked on 2026-10-22 (spec
+decision 74). Put ahead of Phase 6 and v1, as Phase 7's 7a.
+
+**Status (2026-10-22): built.** The read side, posting, follow-ups, a lost store and `validate` work
+on a real workspace; the owner's two calls are test posts on a scratch draft PR in one of their work
+repos, and live vote tests there that take each vote back.
+
+### Scope
+
+1. **The provider** (`Providers/Bitbucket/`), REST 2.0: who the token is (`/user`, its nickname),
+   the repo's privacy, open PRs with their short hashes made full, CI from the head commit's
+   statuses, threads with resolution read from each first comment, the head fetched by SHA.
+2. **Posting a comment at a time**, through Phase 5b's per-thread `Poster`; approvals and change
+   requests as votes (decision 76).
+3. **A marker Bitbucket doesn't render** (decision 75): a link reference definition ends the
+   summary, and each inline comment names its summary in one, so a lost store is rebuilt.
+4. **Tokens**: `token_env` holding `email:token`; the secret check and the environment filter know
+   the token part on its own too.
+5. **Docs and tests**: recorded answers with every name replaced, the per-thread poster on a
+   Bitbucket repo, and live tests behind `RTFD_LIVE_BITBUCKET=1` that name the scratch PR through
+   variables.
+
+### Exit criteria
+
+- ✅ `rtfd validate` reports the repo and who rtfd posts as. *(On a real workspace, 2026-10-22.)*
+- ✅ A review posts and reads back by hash, the hidden lines included, and each inline comment names
+  its summary. *(`BitbucketLiveTests` on the scratch PR; then a real follow-up review there: the
+  interdiff, two inline comments, verified, and neither marker visible in the rendered HTML.)*
+- ✅ A crash after two of five comments posts only the missing three. *(The per-thread `Poster` of
+  Phase 5b; `On_Bitbucket_the_summary_s_marker_is_a_link_reference_and_a_lost_store_rebuilds_from_it`
+  runs it on a Bitbucket repo.)*
+- ✅ A lost store is rebuilt from the markers. *(Live: the scratch PR's history rebuilt from the live
+  tests' posts, and the reviewed head refused.)*
+- ✅ Votes read back, and are taken back. *(`BitbucketLiveTests`, on the scratch draft.)*
+- ✅ `serve` polls a Bitbucket repo. *(Live, from a throwaway home: the scratch PR found and skipped
+  as a draft; `status` shows its review.)*
+
+### Risks and decisions
+
+- ✔ Test posts go to a scratch draft PR between two scratch branches in one of the owner's work
+  repos (the owner, 2026-10-22). Drafts don't notify reviewers; Bitbucket can't delete a PR, so it
+  is declined afterwards.
+- ✔ Live vote tests on that draft, each vote taken back (the owner, 2026-10-22).
+- ✔ `authors` and the posting identity are nicknames: Bitbucket shows nothing else readable of an
+  account (decision 74).
+- ⚠ Bitbucket anchors an inline comment to the PR as it is when the comment lands, so a push during
+  a review can move it. The API takes no commit to anchor to, as far as the docs say.
+- ⚠ Workspace and repository access tokens (no colon, bearer; `x-token-auth` for git) follow
+  Atlassian's docs but weren't tried.
 
 ---
 
@@ -660,18 +716,13 @@ no window anyone can close, and the two personal-machine PowerShell watchers are
 
 ---
 
-## Phase 7: v1, Bitbucket + Copilot
+## Phase 7: v1, Copilot
 
 **Goal:** replace the work-machine watchers that don't need a browser check.
 
 ### Scope
 
-1. **7a. The Bitbucket Cloud provider.** Diffs from the mirror (the source branch, or the fork's);
-   inline anchors as `to`/`from`; resolution through the single-comment endpoint. Bitbucket has no
-   single review object: the summary, each inline comment and the approve or request-changes are
-   separate calls. Matching the write-ahead record body by body makes a partial post recoverable:
-   only the missing bodies are posted. No marker, so no store rebuild (spec decision 35). rtfc's
-   `BitbucketCloudAdapter.cs` is a reference for the read side.
+1. **7a. The Bitbucket Cloud provider.** *(Came early: Phase 5c.)*
 2. **7b. The copilot adapter.** File output through `RTFD_OUTPUT`, `--add-dir` for the worktree,
    `--allow-tool` / `--deny-tool`, the built-in GitHub MCP server disabled, and proof that `-p`
    refuses every tool not explicitly allowed. `validate` prints Copilot's effective tool list.
@@ -685,7 +736,7 @@ no window anyone can close, and the two personal-machine PowerShell watchers are
 
 - ✅ The work repos without a browser check run on rtfd for a week, and their scripts are retired.
 - ✅ `rtfd validate` shows Copilot with no shell, no URL tool and no GitHub MCP server.
-- ✅ A crash after two of five Bitbucket comments: recovery posts only the missing three.
+- ✅ A crash after two of five Bitbucket comments: recovery posts only the missing three. *(Phase 5c.)*
 
 ### Risks and decisions
 
@@ -710,7 +761,8 @@ From the spec, each when something real needs it:
 - "Bring your own runner" through rtfc.
 - Two agents on one PR with merged findings.
 - Cost and token tracking per review.
-- GitLab, and Azure DevOps Server (self-hosted). *(Azure DevOps Services came early: Phase 5b.)*
+- GitLab, Azure DevOps Server and Bitbucket Data Center (self-hosted). *(Azure DevOps Services and
+  Bitbucket Cloud came early: Phases 5b and 5c.)*
 
 ---
 

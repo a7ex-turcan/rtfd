@@ -1,5 +1,6 @@
 using Rtfd.Config;
 using Rtfd.Providers.AzureDevOps;
+using Rtfd.Providers.Bitbucket;
 using Rtfd.Providers.GitHub;
 
 namespace Rtfd.Providers;
@@ -10,7 +11,7 @@ public static class ProviderFactory
     public static IProvider Create(RepoConfig repo, TokenSource tokens) => repo.Provider switch
     {
         ProviderKind.AzureDevOps => new AzureDevOpsProvider(repo.Slug, tokens),
-        ProviderKind.GitHub => new GitHubProvider(repo.Slug, tokens),
-        _ => throw new NotSupportedException($"{ProviderNames.Of(repo.Provider)} isn't built yet"),
+        ProviderKind.Bitbucket => new BitbucketProvider(repo.Slug, tokens),
+        _ => new GitHubProvider(repo.Slug, tokens),
     };
 }
